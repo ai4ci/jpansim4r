@@ -1,0 +1,222 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+
+	<groupId>io.github.ai4ci</groupId>
+	<artifactId>jpansim4r</artifactId>
+	<version>0.0.1-SNAPSHOT</version>
+	<packaging>jar</packaging>
+
+	<!-- Enter a name here -->
+	<name>jpansim4r</name>
+
+	<properties>
+		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+		<project.build.targetEncoding>UTF-8</project.build.targetEncoding>
+		<maven.compiler.source>1.9</maven.compiler.source>
+		<maven.compiler.target>1.9</maven.compiler.target>
+		<r6.version>1.0.1-SNAPSHOT</r6.version>
+	</properties>
+
+	<dependencies>
+		<dependency>
+			<groupId>io.github.terminological</groupId>
+			<artifactId>r6-generator-runtime</artifactId>
+			<version>${r6.version}</version>
+		</dependency>
+		<!-- https://mvnrepository.com/artifact/org.apache.commons/commons-lang3 -->
+		<dependency>
+			<groupId>org.apache.commons</groupId>
+			<artifactId>commons-lang3</artifactId>
+			<version>3.14.0</version>
+		</dependency>
+
+		<!-- the r6-generator-runtime includes necessary dependencies on slf4j
+		and log4j -->
+		<dependency>
+			<groupId>org.junit.jupiter</groupId>
+			<artifactId>junit-jupiter-api</artifactId>
+			<version>5.10.2</version>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>cs.gmu.edu.eclab</groupId>
+			<artifactId>mason</artifactId>
+			<version>20.1.0-SNAPSHOT</version>
+		</dependency>
+		<!-- https://mvnrepository.com/artifact/org.apache.commons/commons-math3 -->
+		<dependency>
+			<groupId>org.apache.commons</groupId>
+			<artifactId>commons-math3</artifactId>
+			<version>3.6.1</version>
+		</dependency>
+		<!-- https://mvnrepository.com/artifact/com.google.guava/guava -->
+		<!--		<dependency>-->
+		<!--		    <groupId>com.google.guava</groupId>-->
+		<!--		    <artifactId>guava</artifactId>-->
+		<!--		    <version>33.2.0-jre</version>-->
+		<!--		</dependency>-->
+		<dependency>
+			<groupId>org.jgrapht</groupId>
+			<artifactId>jgrapht-core</artifactId>
+			<version>1.5.2</version>
+		</dependency>
+		<!--		<dependency>-->
+		<!--			<groupId>io.shiftleft</groupId>-->
+		<!--			<artifactId>overflowdb-traversal_2.13</artifactId>-->
+		<!--			<version>1.191</version>-->
+		<!--		</dependency>-->
+
+		<dependency>
+			<groupId>org.projectlombok</groupId>
+			<artifactId>lombok</artifactId>
+			<version>1.18.32</version>
+			<scope>provided</scope>
+		</dependency>
+<!--		<dependency>-->
+<!--			<groupId>com.esotericsoftware</groupId>-->
+<!--			<artifactId>kryo</artifactId>-->
+<!--			<version>5.6.0</version>-->
+<!--		</dependency>-->
+
+		<dependency>
+			<groupId>org.apache.logging.log4j</groupId>
+			<artifactId>log4j-api</artifactId>
+			<version>2.20.0</version>
+		</dependency>
+		<dependency>
+			<groupId>org.apache.logging.log4j</groupId>
+			<artifactId>log4j-core</artifactId>
+			<version>2.20.0</version>
+		</dependency>
+		<dependency>
+			<groupId>org.apache.logging.log4j</groupId>
+			<artifactId>log4j-slf4j-impl</artifactId>
+			<version>2.20.0</version>
+		</dependency>
+		<!-- https://mvnrepository.com/artifact/org.apache.commons/commons-statistics-distribution -->
+<dependency>
+    <groupId>org.apache.commons</groupId>
+    <artifactId>commons-statistics-distribution</artifactId>
+    <version>1.0</version>
+</dependency>
+
+<!--		 <dependency>-->
+<!--                <groupId>de.javakaffee</groupId>-->
+<!--                <artifactId>kryo-serializers</artifactId>-->
+<!--                <version>0.45</version>-->
+<!--            </dependency>-->
+	</dependencies>
+
+	<repositories>
+		<repository>
+			<id>github</id>
+			<url>https://maven.pkg.github.com/terminological/m2repo</url>
+		</repository>
+	</repositories>
+
+	<!-- Resolve maven plugin on Github -->
+	<pluginRepositories>
+		<pluginRepository>
+			<id>github</id>
+			<url>https://maven.pkg.github.com/terminological/m2repo</url>
+		</pluginRepository>
+	</pluginRepositories>
+
+	<build>
+		<plugins>
+			<plugin>
+				<artifactId>maven-compiler-plugin</artifactId>
+				<version>3.1</version>
+				<configuration>
+					<source>${maven.compiler.source}</source>
+					<target>${maven.compiler.target}</target>
+				</configuration>
+			</plugin>
+			<plugin>
+				<groupId>io.github.terminological</groupId>
+				<artifactId>r6-generator-maven-plugin</artifactId>
+				<version>${r6.version}</version>
+				<configuration>
+					<packageData>
+						<!-- R library metadata: -->
+						<title>jpansim4r: R6 Java wrapper package</title>
+						<version>${project.version}}</version>
+						<packageName>jpansim4r</packageName>
+						<license>MIT</license>
+						<!-- <url>ENTER URL</url> -->
+						<!-- <doi>ENTER DOI</doi> -->
+						<description>
+							An R6 package wrapping java code in the
+							io.github.ai4ci:jpansim4r library.
+							This library was generated by the
+							r6-generator-maven-plugin.
+						</description>
+						<maintainerName>Robert</maintainerName>
+						<maintainerFamilyName>Challen</maintainerFamilyName>
+						<maintainerEmail>rob.challen@bristol.ac.uk</maintainerEmail>
+						<maintainerOrganisation>University of Bristol</maintainerOrganisation>
+						<maintainerORCID>0000-0002-5504-7768</maintainerORCID>
+						<githubOrganisation>ai4ci</githubOrganisation>
+						<githubRepository>jpansim4r</githubRepository>
+						<!-- Build configuration options: -->
+						<debug>false</debug> <!-- starts the R library with java
+						code in debugging mode -->
+						<rjavaOpts>
+							<rjavaOpt>-Xmx256M</rjavaOpt> <!--  this example sets
+							the maximum heap size -->
+						</rjavaOpts>
+						<!-- The following 2 options requires a working R
+						version on the system that generates the R package -->
+						<usePkgdown>true</usePkgdown> <!-- Pkgdown will generate
+						a nice looking site and run all the vignettes on build -->
+						<useCmdCheck>false</useCmdCheck> <!-- Enable this to run
+						RCMD Check as part of maven build-->
+						<installLocal>true</installLocal> <!-- Install the
+						library on the local machine. disable for CI -->
+						<useRoxygen2>false</useRoxygen2> <!-- Roxygen can
+						integrate user supplied and generated R code. This is
+						needed if you add custom R files to the project -->
+						<useJavadoc>false</useJavadoc> <!-- building the javadocs
+						into the documentation is nice but can add a lot to size
+						of the package -->
+						<!-- distribute java as fat jar. all dependencies
+						pre-linked and embedded in distribution -->
+						<!-- packaging all dependencies is the most robust but
+						results in a large package size -->
+						<preCompileBinary>true</preCompileBinary>
+						<packageAllDependencies>true</packageAllDependencies>
+						<!-- make the jar file smaller by using the shade plugin -->
+						<useShadePlugin>false</useShadePlugin>
+					</packageData>
+					<outputDirectory>${project.basedir}/..</outputDirectory>
+				</configuration>
+				<executions>
+					<execution>
+						<id>clean-r-library</id>
+						<goals>
+							<goal>clean-r-library</goal>
+						</goals>
+					</execution>
+					<!-- This execution flattens the pom.xml to remove
+					unnecessary dependencies -->
+					<execution>
+						<id>flatten-pom</id>
+						<goals>
+							<goal>flatten-pom</goal>
+						</goals>
+					</execution>
+					<!-- This execution generates the supporting r code -->
+					<execution>
+						<id>generate-r-library</id>
+						<goals>
+							<goal>generate-r-library</goal>
+						</goals>
+					</execution>
+				</executions>
+			</plugin>
+		</plugins>
+	</build>
+</project>

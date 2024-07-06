@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+	<groupId>io.github.ai4ci</groupId>
+	<artifactId>jpansim4r-parent</artifactId>
+	<version>main-SNAPSHOT</version>
+	<packaging>pom</packaging>
+
+	
+	<name>jpansim4r parent pom</name>
+	
+	<properties>
+		<project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+		<project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
+	</properties>
+	
+	<!-- This parent POM is required to make mvn archetypes happy. It can be deleted. -->
+	<!-- in this set up though as a submodule  -->
+	<modules>
+		<module>java</module> 
+	</modules>
+	
+</project>
