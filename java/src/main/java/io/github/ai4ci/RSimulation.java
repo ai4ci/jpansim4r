@@ -72,7 +72,7 @@ public abstract class RSimulation<
 	 * for maintaining seedBase during the scope of the build process.. 
 	 */
 	public void setSeed(long seedBase) {
-		long tmp = RSimulation.seedFrom(seedBase, config, configBootstrapId, params, paramBootstrapId);
+		long tmp = RSimulation.seedFrom(seedBase, config, configBootstrapId, params, paramBootstrapId, executionBootstrapId);
 		super.setSeed(tmp);
 	}
 	
@@ -83,6 +83,7 @@ public abstract class RSimulation<
 	private LocalDate jobDate = LocalDate.now();
 	private int configBootstrapId = 0;
 	private int paramBootstrapId = 0;
+	private int executionBootstrapId = 0;
 	private ConcurrentMap<String, RSimulationObserver<S,?>> observers = new ConcurrentHashMap<>();
 	transient private ConcurrentMap<String, Object> cache = new ConcurrentHashMap<>();
 	private Sampler sampler;
@@ -112,10 +113,10 @@ public abstract class RSimulation<
 	/**
 	 * Gets a urn style id for a specific simulation configuration, parameterisation
 	 * and replication.
-	 * @return A string id unique for the simulation bootstrap.
+	 * @return A string id unique for the simulation bootstrap, does not include step.
 	 */
-	public String getId() {
-		return RSimulation.idFrom(getJobDate(), config, configBootstrapId, params, paramBootstrapId, null);
+	public String getUrn() {
+		return RSimulation.idFrom(getJobDate(), config, configBootstrapId, params, paramBootstrapId, executionBootstrapId, null);
 	}
 	
 	/**
@@ -124,7 +125,7 @@ public abstract class RSimulation<
 	 * @return A string id unique for the simulation step 
 	 */
 	public String getStepId() {
-		return RSimulation.idFrom(getJobDate(), config, configBootstrapId, params, paramBootstrapId, (int) this.schedule.getSteps());
+		return RSimulation.idFrom(getJobDate(), config, configBootstrapId, params, paramBootstrapId, executionBootstrapId, (int) this.schedule.getSteps());
 	}
 	
 	
@@ -274,7 +275,7 @@ public abstract class RSimulation<
 	
 	public abstract void updateParameterisation();
 
-	protected void setConfiguration(C config) {
+	public void setConfiguration(C config) {
 		this.config = config;
 	};
 	public void setParameterisation(P params) {
@@ -399,7 +400,7 @@ public abstract class RSimulation<
 	 * 
 	 * Following this method the `createAgents` method is called.
 	 */
-	protected abstract void startConfiguration();
+	public abstract void setupStage1BeginConfiguration();
 
 	/**
 	 * This is a factory method and
@@ -425,7 +426,7 @@ public abstract class RSimulation<
 	 * is called before the simulations `finishConfiguration` method is called.
 	 * Which will schedule the agents. 
 	 */
-	protected abstract void createAgents();
+	public abstract void setupStage2CreateAgents();
 
 	/**
 	 * This hook is called at the end of the configuration stage, prior to the
@@ -435,14 +436,9 @@ public abstract class RSimulation<
 	 * `checkComplete` is called at the beginning of each cycle. Any 
 	 * extension to this method must call `super()`.
 	 */
-	protected void finishConfiguration() {
-		
-		
-		
-		
+	public void setupStage4FinishConfiguration() {
+		log.debug(this.getUrn()+ " simulation configuration complete (stage 4).");
 	};
-
-
 
 	/**
 	 * By default a no-op. This is called once the simulation has been 
@@ -451,7 +447,7 @@ public abstract class RSimulation<
 	 * derive simulation wide values from the combination of configuration and 
 	 * parameterisation.
 	 */
-	protected void startParameterisation() {}
+	public void setupStage5StartParameterisation() {}
 	
 	/**
 	 * This is called when all the parameterisation of the 
@@ -459,7 +455,9 @@ public abstract class RSimulation<
 	 * It is possible this might be used to conditionally wire agents into 
 	 * their environments depending on their start conditions. 
 	 */
-	protected void finishParameterisation() {}; 
+	public void setupStage7FinishParameterisation() {
+		log.debug(this.getUrn()+ " simulation parameterisation complete (stage 7).");
+	}; 
 
 	protected int generateAgentId() {
 		return agents.size()-1;
@@ -516,12 +514,12 @@ public abstract class RSimulation<
 	 * @param basePath
 	 * @return
 	 */
-	protected String getBaselineConfigFilePath(String basePath) {
+	public String getBaselineConfigFilePath(String basePath) {
 		return RSimulation.relPathFrom(basePath, getJobDate(), this.config, this.configBootstrapId, 
 				null, null, null, "build.ser");
 	}
 	
-	protected String getFilePath(String basePath, Integer step, String fileType) {
+	public String getFilePath(String basePath, Integer step, String fileType) {
 		return RSimulation.relPathFrom(basePath, 
 				this.getJobDate(), 
 				this.config, this.configBootstrapId, 
@@ -539,19 +537,23 @@ public abstract class RSimulation<
 			Integer configBootstrap,
 			P params2,
 			Integer paramBootstrap,
+			Integer executionBootstrap,
 			Integer stepId
 		) {
 		String tmp = jobDate.format(DateTimeFormatter.BASIC_ISO_DATE); 
 		if (config2 != null) {
-			tmp += ":"+config2.getConfigurationName();
+			tmp += ":cfg:"+config2.getConfigurationName();
 		}
 		if (configBootstrap != null) tmp += ":"+configBootstrap.toString();
 		if (params2 != null) {
-			tmp += ":"+params2.getParameterisationName();
+			tmp += ":param:"+params2.getParameterisationName();
 			if (paramBootstrap != null) tmp += ":"+paramBootstrap.toString();
 		}
+		if (executionBootstrap != null) {
+			tmp += ":execution:"+executionBootstrap.toString();
+		}
 		if (stepId != null) {
-			tmp += ":"+stepId.toString();
+			tmp += ":step:"+stepId.toString();
 		}
 		return tmp;
 	}
@@ -608,10 +610,10 @@ public abstract class RSimulation<
 	 * @param <C> the type of configuration
 	 * @param <P> the type of parameterisation
 	 * @param seedBase a base value for a seed
-	 * @param config2 a config object
-	 * @param configBootstrap which replicates
-	 * @param params2 a param object
-	 * @param paramBootstrap which replicate
+	 * @param config2 a config object which may be null
+	 * @param configBootstrap which replicate which may be null
+	 * @param params2 a param object  which may be null
+	 * @param paramBootstrap which replicate which may be null
 	 * @return
 	 */
 	public static <
@@ -621,14 +623,17 @@ public abstract class RSimulation<
 		C config2, 
 		Integer configBootstrap,
 		P params2,
-		Integer paramBootstrap) {
+		Integer paramBootstrap,
+		Integer executionBootstrap
+			) {
 		
 		long tmp = (long) (
-				seedBase*((int) Math.pow(31,4))+
-				(config2 != null ? config2.getConfigurationName().hashCode()*((int) Math.pow(31,3)) : 0) +
-				(configBootstrap != null ? configBootstrap*((int) Math.pow(31,2)) : 0) +
-				(params2 != null ? params2.getParameterisationName().hashCode()*((int) Math.pow(31,1)) : 0) +
-				(paramBootstrap != null ? paramBootstrap : 0));
+				seedBase*((int) Math.pow(31,5))+
+				(config2 != null ? config2.getConfigurationName().hashCode()*((int) Math.pow(31,4)) : 0) +
+				(configBootstrap != null ? configBootstrap*((int) Math.pow(31,3)) : 0) +
+				(params2 != null ? params2.getParameterisationName().hashCode()*((int) Math.pow(31,2)) : 0) +
+				(paramBootstrap != null ? paramBootstrap*((int) Math.pow(31,1)) : 0))+
+				(executionBootstrap != null ? executionBootstrap : 0);
 		
 		return tmp;
 	}
@@ -639,5 +644,10 @@ public abstract class RSimulation<
 
 	public A getAgentById(int id) {
 		return this.agents.get(id);		
+	}
+
+
+	public void setExecutionBootstrapId(int bootstrapId) {
+		this.executionBootstrapId = bootstrapId;
 	}
 }

@@ -9,7 +9,7 @@ import io.github.ai4ci.stats.Sampler;
 /**
  * Models a testing process
  */
-public class TestTest implements Serializable {
+public class TestResult implements Serializable {
 	
 	public enum Result {PENDING,POSITIVE,NEGATIVE};
 	
@@ -18,7 +18,7 @@ public class TestTest implements Serializable {
 	private long time;
 	private long delay;
 	
-	public TestTest(boolean infected, long time, long delay, Sampler rng, double sensitivity, double specificity) {
+	public TestResult(boolean infected, long time, long delay, Sampler rng, double sensitivity, double specificity) {
 		super();
 		this.infected = infected;
 		this.time = time;
@@ -50,7 +50,7 @@ public class TestTest implements Serializable {
 		return Optional.of(detected ? Result.POSITIVE : Result.NEGATIVE);
 	}
 	
-	public Optional<TestTest> publishedResult(long day) {
+	public Optional<TestResult> publishedResult(long day) {
 		if (day != time+delay) return Optional.empty();
 		return Optional.of(this);
 	}

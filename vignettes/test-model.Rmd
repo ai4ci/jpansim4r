@@ -1,0 +1,39 @@
+---
+title: "jpansim4r: Test Model"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{jpansim4r: Getting Started}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+```{r}
+library(tidyverse)
+
+abm_raw = readr::read_csv("~/tmp/incidence.csv")
+
+abm = abm_raw %>% mutate(control = stringr::str_extract(id,"param:([^:]*)",1))
+
+ggplot(abm, aes(x=timestep, y=INCIDENCE, colour = control, group = id))+geom_line()+scale_y_continuous(trans="log1p")
+ggplot(abm, aes(x=timestep, y=INFECTED, colour = control, group = id))+geom_line()#+scale_y_continuous(trans="log1p")
+ggplot(abm, aes(x=timestep, y=SUSCEPTIBLE, colour = control, group = id))+geom_line()
+ggplot(abm, aes(x=timestep, y=CONTACT_RATES, colour = control, group = id))+geom_line()
+ggplot(abm, aes(x=timestep, y=RT_EFFECTIVE, colour = control, group = id))+geom_line()
+
+```
+
+
+
+```{r}
+
+abm %>% group_by(control) %>% summarise(total_loss = sum(20-CONTACT_RATES))
+
+
+```

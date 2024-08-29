@@ -41,10 +41,6 @@ public abstract class RAgentObserver<
 		return agentType;
 	}
 	
-	public int getAgentId() {
-		return agent.getId();
-	}
-	
 	@Override
 	public abstract void update(A subject);
 	

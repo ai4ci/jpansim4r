@@ -1,9 +1,7 @@
 package io.github.ai4ci;
 
 import java.io.Serializable;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -76,7 +74,7 @@ public abstract class RAgent<
 	 * @param <X>
 	 * @param configuration
 	 */
-	public abstract void setupBaseline();
+	public abstract void setupStage3SetAgentBaseline();
 	
 	/**
 	 * Called during parameterisation. This gets called before the simulation starts
@@ -91,7 +89,7 @@ public abstract class RAgent<
 	 * RNG generates log normal (e.g. sampler().logNormal()).
 	 * By the time this is finished the remainsActive() function must work. 
 	 */
-	public abstract void initialiseStatus();
+	public abstract void setupStage6InitialiseAgentStatus();
 	
 	
 	/**
@@ -128,6 +126,10 @@ public abstract class RAgent<
 	 */
 	public int getId() {
 		return id;
+	}
+	
+	public String getUrn() {
+		return this.getSimulation().getUrn()+":agent:"+getId();
 	}
 	
 	/** 
@@ -319,7 +321,6 @@ public abstract class RAgent<
 		
 		public Reference(int id) {
 			this.id = id;
-			
 		}
 		
 		int id;
@@ -332,6 +333,5 @@ public abstract class RAgent<
 	public void copyStatus() {
 		this.oldStatus = SerializationUtils.clone(status);
 	}
-	
 	
 }

@@ -4,7 +4,9 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.ObjectOutputStream;
 import java.io.Serializable;
+import java.lang.reflect.InvocationTargetException;
 import java.util.Optional;
+import java.util.function.Supplier;
 
 
 public class RObservedSimulation<
@@ -15,10 +17,14 @@ public class RObservedSimulation<
 	RObservatory<S,A> observatory;
 	State state = State.UNCONFIGURED;
 	
-	public enum State {UNCONFIGURED, INITIALIZED, CONFIGURED, PARAMETERISED, RUNNING, COMPLETE}
+	public enum State {UNCONFIGURED, INITIALIZED, CONFIGURED, PARAMETERISED, READY, RUNNING, COMPLETE}
 	
 	public RObservedSimulation(S simulation2) {
 		this.simulation = simulation2;
+	}
+	
+	public boolean atOrBeyondStage(State state) {
+		return this.state.compareTo(state) >= 0;
 	}
 	
 	public void save(String directory) {
@@ -44,12 +50,14 @@ public class RObservedSimulation<
 	}
 	
 	public S getSimulation() {return simulation;}
-	public Optional<RObservatory<S,A>> getObservatory() {return Optional.ofNullable(observatory);}
+	public Optional<RObservatory<S,A>> getObservatory() {
+		return Optional.ofNullable(observatory);
+	}
 	
 	public String toString() {
 		String tmp;
 		if (state.equals(State.RUNNING)) tmp = simulation.getStepId();
-		else tmp = simulation.getId();
+		else tmp = simulation.getUrn();
 		return tmp;
 	}
 
@@ -69,7 +77,7 @@ public class RObservedSimulation<
 	 * @param type  the observatory type
 	 * @return the observatory
 	 */
-	protected void initialiseObservatory() {
+	public void initialiseObservatory() {
 		// TODO: better as a checked exception?
 		if (observatory == null) {
 			if (getState().equals(State.UNCONFIGURED)) throw new RuntimeException("Simulation must be configured before this is called.");
@@ -81,12 +89,41 @@ public class RObservedSimulation<
 	private void registerNamedObservers() {
 		// Any named observers in the simulation or agents we register with the observatory 
 		// so we can query them for export later
-		simulation.getObservers().forEach(o -> observatory.namedObservers.add(o));
+		simulation.getObservers().forEach(o -> observatory.registerNamedObserver(o));
 		simulation.streamAgents().forEach(a -> {
-			a.getObservers().forEach(o -> observatory.namedObservers.add(o));
+			a.getObservers().forEach(o -> observatory.registerNamedObserver(o));
 		});
 		// Add the observatory to the simulation schedule.
 		simulation.getSchedule().scheduleOnce(observatory, observatory.getPriority());
 	}
+
+	public void setState(State initialized) {
+		this.state = initialized;
+	}
+
+	public boolean hasNamedObservers() {
+		return 
+				this.getSimulation().getObservers().findAny().isPresent() ||
+				this.getSimulation().streamAgents().flatMap(a -> a.getObservers()).findAny().isPresent();
+	}
 	
+	
+	public static <S extends RSimulation<S,?,?,A>, 
+	A extends RAgent<A,S,?,?>> Supplier<? extends RObservedSimulation<S,A>> uninitialised(Class<S> type) {
+		return new Supplier<RObservedSimulation<S,A>>() {
+			@Override
+			public RObservedSimulation<S, A> get() {
+				try {
+					S simulation = type.getDeclaredConstructor().newInstance();
+					RObservedSimulation<S,A> obsSim = new RObservedSimulation<S,A>(simulation);
+					return obsSim;
+				} catch (InstantiationException | IllegalAccessException | IllegalArgumentException
+						| NoSuchMethodException | SecurityException e) {
+					throw new RuntimeException(type.getName()+" must provide a norgs public constructor",e);
+				} catch (InvocationTargetException e) {
+					throw new RuntimeException(e.getCause());
+				}
+			};
+		};
+	}
 }

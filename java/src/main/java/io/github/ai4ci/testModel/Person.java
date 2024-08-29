@@ -16,43 +16,43 @@ import org.jgrapht.graph.SimpleWeightedGraph;
 import io.github.ai4ci.RAgent;
 import io.github.ai4ci.stats.Binomial;
 import io.github.ai4ci.stats.DelayDistribution;
-import io.github.ai4ci.testModel.TestSetup.AgentStatus.State;
-import io.github.ai4ci.testModel.TestSetup.OutbreakParameters.Control;
-import io.github.ai4ci.testModel.TestTest.Result;
+import io.github.ai4ci.testModel.Configuration.AgentStatus.State;
+import io.github.ai4ci.testModel.Configuration.OutbreakParameters.Control;
+import io.github.ai4ci.testModel.TestResult.Result;
 
-public class TestAgent extends RAgent<TestAgent,TestOutbreak,TestSetup.AgentBaseline,TestSetup.AgentStatus> {
+public class Person extends RAgent<Person,Outbreak,Configuration.AgentBaseline,Configuration.AgentStatus> {
 
 	public enum Observers {  TESTS, DETECTED_CONTACTS };
 
-	public TestAgent(TestOutbreak simulation) {
+	public Person(Outbreak simulation) {
 		super(simulation);
 	}
 	
 	@Override
-	public void setupBaseline() {
+	public void setupStage3SetAgentBaseline() {
 		
-		TestSetup.OutbreakConfig configuration = this.getSimulation().getConfiguration();
+		Configuration.OutbreakConfig configuration = this.getSimulation().getConfiguration();
 		
-		this.setBaseline(TestSetup.baselineFrom(configuration, this.sampler())); 
+		this.setBaseline(Configuration.baselineFrom(configuration, this.sampler())); 
 		
 		keepHistory(
 			Observers.TESTS, 
-			TestTest.class,
+			TestResult.class,
 			a -> a.testToday(),
 			4
 		);
 		
 		keepHistoryList(
 			Observers.DETECTED_CONTACTS, 
-			TestAgent.Reference.class, 
+			Person.Reference.class, 
 			a -> a.getDetectedContacts().stream().map(a2 -> a2.weakReference()).collect(Collectors.toList()),
 			14
 		);
 		
 	}
 
-	public Stream<TestTest> testHistory() {
-		return this.getNamedObservation(Observers.TESTS, TestTest.class).stream();
+	public Stream<TestResult> testHistory() {
+		return this.getNamedObservation(Observers.TESTS, TestResult.class).stream();
 	}
 	
 	@Override
@@ -63,12 +63,12 @@ public class TestAgent extends RAgent<TestAgent,TestOutbreak,TestSetup.AgentBase
 	}
 
 	@Override
-	public TestAgent self() {return this;}
+	public Person self() {return this;}
 
 	@Override
-	public void initialiseStatus() {
+	public void setupStage6InitialiseAgentStatus() {
 		this.setStatus(
-				TestSetup.statusFrom(
+				Configuration.statusFrom(
 						this.getSimulation().getConfiguration(), 
 						this.getSimulation().getParameterisation(), 
 						this.getBaseline(), 
@@ -87,8 +87,8 @@ public class TestAgent extends RAgent<TestAgent,TestOutbreak,TestSetup.AgentBase
 //				this.getStatus().getState().equals(State.INFECTED);
 //	}
 	
-	public Optional<TestTest> testToday() {
-		return this.cached("testToday", TestTest.class, 
+	public Optional<TestResult> testToday() {
+		return this.cached("testToday", TestResult.class, 
 			a -> {
 				double pTmp;
 				// TODO: this logic for deciding if a person is tested needs
@@ -114,7 +114,7 @@ public class TestAgent extends RAgent<TestAgent,TestOutbreak,TestSetup.AgentBase
 				if (this.sampler().uniform() > pTmp) { 
 					return Optional.empty();
 				} else { 
-					return Optional.of(new TestTest(
+					return Optional.of(new TestResult(
 						this.infectiousness() > 0, // true test status as test is testing infectiousness 
 						this.getSimTime().longValue(), // test date
 						(long) Math.floor(this.sampler().logNormal(
@@ -132,10 +132,10 @@ public class TestAgent extends RAgent<TestAgent,TestOutbreak,TestSetup.AgentBase
 	
 	// TODO: This all needs restructuring for multiple tests with a single
 	// test repository / factory.
-	public List<TestTest> resultToday() {
+	public List<TestResult> resultToday() {
 		return 
-				this.cachedList("results", TestTest.class, 
-						a -> a.getNamedObservation(Observers.TESTS, TestTest.class)
+				this.cachedList("results", TestResult.class, 
+						a -> a.getNamedObservation(Observers.TESTS, TestResult.class)
 							.stream()
 							.flatMap(t -> t.publishedResult(this.getSimTime()).stream())
 							.collect(Collectors.toList())
@@ -152,7 +152,7 @@ public class TestAgent extends RAgent<TestAgent,TestOutbreak,TestSetup.AgentBase
 			 * day post infection.. 
 			 * 
 			 */
-			Set<TestAgent> infectors = this.getContacts().stream()
+			Set<Person> infectors = this.getContacts().stream()
 					.filter(a -> a.getStatus().getState().equals(State.INFECTED))
 					.filter(a -> this.sampler().uniform() < a.infectiousness()*this.getStatus().getProbabilityInfectionGivenInfectiousContact() )
 					.collect(Collectors.toSet());
@@ -164,7 +164,7 @@ public class TestAgent extends RAgent<TestAgent,TestOutbreak,TestSetup.AgentBase
 				// TODO: figure out how to decide which is the infector in a fairer
 				// way, or whether a multi infector model is possible.
 				infectors.stream().findFirst().ifPresent(i -> {
-					DirectedAcyclicGraph<TestAgent, Infection> network = this.getSimulation()
+					DirectedAcyclicGraph<Person, Infection> network = this.getSimulation()
 						.getInfectionNetwork();
 					synchronized(network) {
 						network.addVertex(i);
@@ -299,9 +299,9 @@ public class TestAgent extends RAgent<TestAgent,TestOutbreak,TestSetup.AgentBase
 	public Binomial contactHistoryPositivity() {
 		return this.cached("contactPrevalence",Binomial.class, a -> {
 			Optional<Binomial> contactStatus = 
-					a.getNamedListObservation(Observers.DETECTED_CONTACTS, TestAgent.Reference.class).stream()
+					a.getNamedListObservation(Observers.DETECTED_CONTACTS, Person.Reference.class).stream()
 						.flatMap(st -> st.stream())
-						.map(ar -> (TestAgent) ar.resolve())
+						.map(ar -> (Person) ar.resolve())
 						.map(contact -> contact.knownTestPositiveToday() ? Binomial.of(1, 1) : Binomial.of(0,1))
 						.reduce(Binomial::combine);
 			return contactStatus;
@@ -324,13 +324,13 @@ public class TestAgent extends RAgent<TestAgent,TestOutbreak,TestSetup.AgentBase
 	
 	public Optional<Long> getDaysSinceLastInfection() {
 		return this.getOldStatus()
-				.filter(s -> s.getLastInfected() != TestSetup.NA_LONG)
+				.filter(s -> s.getLastInfected() != Configuration.NA_LONG)
 				.map(s -> this.getSimTime()-s.getLastInfected());
 	}
 	
 	public Optional<Long> getDaysSinceLastTestTaken() {
 		return this.getOldStatus()
-				.filter(s -> s.getLastTested() != TestSetup.NA_LONG)
+				.filter(s -> s.getLastTested() != Configuration.NA_LONG)
 				.map(s -> this.getSimTime()-s.getLastTested());
 	}
 	
@@ -389,7 +389,7 @@ public class TestAgent extends RAgent<TestAgent,TestOutbreak,TestSetup.AgentBase
 	
 	
 	
-	public List<TestAgent> getContacts() {
+	public List<Person> getContacts() {
 		
 //		ClosestFirstIterator<TestAgent, TestAgent.Relationship> search = new ClosestFirstIterator<>(network, Collections.singletonList(subject),2.0);
 //		Iterable<TestAgent> tmp = (() -> search); 
@@ -399,8 +399,8 @@ public class TestAgent extends RAgent<TestAgent,TestOutbreak,TestSetup.AgentBase
 		
 		// Mobility adjusted contact network.
 		
-		return cachedList("contacts", TestAgent.class, a -> {
-			SimpleWeightedGraph<TestAgent, Relationship> network = a.getSimulation().getContactNetwork();
+		return cachedList("contacts", Person.class, a -> {
+			SimpleWeightedGraph<Person, Relationship> network = a.getSimulation().getContactNetwork();
 			int connectedness = this.getSimulation().getConfiguration().getConnectedness();
 			return StreamSupport.stream(network.edgesOf(a).spliterator(),false)
 					// The network edge weight is the quantile of connection strength.
@@ -412,8 +412,8 @@ public class TestAgent extends RAgent<TestAgent,TestOutbreak,TestSetup.AgentBase
 		
 	}
 	
-	public List<TestAgent> getDetectedContacts() {
-		return cachedList("detectedContacts", TestAgent.class, a -> { 
+	public List<Person> getDetectedContacts() {
+		return cachedList("detectedContacts", Person.class, a -> { 
 			return a.getContacts().stream()
 				// Likelihood of a contact being detected is a function of the person contacted
 				.filter(contact -> a.sampler().uniform() < a.getSimulation().getParameterisation().getContactRecordedProbability())

@@ -18,7 +18,7 @@ import lombok.Value;
 import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
-public class TestSetup {
+public class Configuration {
 
 	@Value
 	@Builder

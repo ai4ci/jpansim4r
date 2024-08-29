@@ -17,24 +17,24 @@ import io.github.ai4ci.RSimulation;
 import io.github.ai4ci.RSimulationObserver;
 import io.github.ai4ci.RSteppable;
 import io.github.ai4ci.stats.Binomial;
-import io.github.ai4ci.testModel.TestSetup.AgentStatus.State;
-import io.github.ai4ci.testModel.TestSetup.OutbreakParameters.LockdownState;
-import io.github.ai4ci.testModel.TestTest.Result;
+import io.github.ai4ci.testModel.Configuration.AgentStatus.State;
+import io.github.ai4ci.testModel.Configuration.OutbreakParameters.LockdownState;
+import io.github.ai4ci.testModel.TestResult.Result;
 import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
-public class TestOutbreak extends RSimulation<TestOutbreak,
-		TestSetup.OutbreakConfig,
-		TestSetup.OutbreakParameters,
-		TestAgent> {
+public class Outbreak extends RSimulation<Outbreak,
+		Configuration.OutbreakConfig,
+		Configuration.OutbreakParameters,
+		Person> {
 	
 	@Override
-	public TestOutbreak self() {return this;}
+	public Outbreak self() {return this;}
 	
-	private SimpleWeightedGraph<TestAgent, TestAgent.Relationship> contacts;
-	private DirectedAcyclicGraph<TestAgent, TestAgent.Infection> infections;
+	private SimpleWeightedGraph<Person, Person.Relationship> contacts;
+	private DirectedAcyclicGraph<Person, Person.Infection> infections;
 	
-	public enum Observations {INCIDENCE};
+	public enum Observations {INCIDENCE, CONTACT_RATES, TEST_POSITIVES, TESTS_PERFORMED, RT_EFFECTIVE};
 	
 	@Override
 	protected boolean checkComplete() {
@@ -45,7 +45,7 @@ public class TestOutbreak extends RSimulation<TestOutbreak,
 				.orElse(Boolean.FALSE);
 	}
 
-	private static RSimulationObserver<TestOutbreak, Long> inState(State state) {
+	private static RSimulationObserver<Outbreak, Long> inState(State state) {
 		return RObserver.simulationHistory(state, Long.class,
 				s -> Optional.of(
 						s.streamAgents()
@@ -57,7 +57,7 @@ public class TestOutbreak extends RSimulation<TestOutbreak,
 	
 	@SuppressWarnings("unchecked")
 	@Override
-	protected void startConfiguration() {
+	public void setupStage1BeginConfiguration() {
 		
 		this.registerNamedObserver(inState(State.SUSCEPTIBLE));
 		this.registerNamedObserver(inState(State.INFECTED));
@@ -67,23 +67,44 @@ public class TestOutbreak extends RSimulation<TestOutbreak,
 				s -> s.streamAgents().map(a -> a.infectedToday() ? 1L : 0L).reduce((x,y) -> x+y ),
 				null
 		));
+		this.registerNamedObserver(RObserver.simulationHistory(
+				Observations.CONTACT_RATES, Double.class,
+				s -> Optional.of(((Outbreak) s).contactRates()),
+				null
+		));
+		this.registerNamedObserver(RObserver.simulationHistory(
+				Observations.TEST_POSITIVES, Integer.class,
+				s -> Optional.of(((Outbreak) s).testPositivity().getKey()),
+				null
+		));
+		this.registerNamedObserver(RObserver.simulationHistory(
+				Observations.TESTS_PERFORMED, Integer.class,
+				s -> Optional.of(((Outbreak) s).testPositivity().getValue()),
+				null
+		));
+		this.registerNamedObserver(RObserver.simulationHistory(
+				Observations.RT_EFFECTIVE, Double.class,
+				s -> Optional.of(((Outbreak) s).getRtEffective()),
+				null
+		));
+		//		,
 		
 		this.contacts =  new SimpleWeightedGraph<>(
-				(Serializable & Supplier<TestAgent>) () -> new TestAgent(this),
-				(Serializable & Supplier<TestAgent.Relationship>) () -> new TestAgent.Relationship()
+				(Serializable & Supplier<Person>) () -> new Person(this),
+				(Serializable & Supplier<Person.Relationship>) () -> new Person.Relationship()
 		);
-		this.infections =  new DirectedAcyclicGraph<TestAgent, TestAgent.Infection>(
-				(Serializable & Supplier<TestAgent>) () -> new TestAgent(this),
-				(Serializable & Supplier<TestAgent.Infection>) () -> new TestAgent.Infection(this.getSimTime()),
+		this.infections =  new DirectedAcyclicGraph<Person, Person.Infection>(
+				(Serializable & Supplier<Person>) () -> new Person(this),
+				(Serializable & Supplier<Person.Infection>) () -> new Person.Infection(this.getSimTime()),
 				false
 		);
 		
 	}
 
 	@Override
-	protected void createAgents() {
-		WattsStrogatzGraphGenerator<TestAgent, TestAgent.Relationship> gen = 
-				new WattsStrogatzGraphGenerator<TestAgent, TestAgent.Relationship>(
+	public void setupStage2CreateAgents() {
+		WattsStrogatzGraphGenerator<Person, Person.Relationship> gen = 
+				new WattsStrogatzGraphGenerator<Person, Person.Relationship>(
 						this.getConfiguration().getPopulationSize(),
 						this.getConfiguration().getConnectedness(),
 						this.getConfiguration().getNetworkRandomness()
@@ -103,22 +124,20 @@ public class TestOutbreak extends RSimulation<TestOutbreak,
 				));
 	}
 	
-	protected void finishConfiguration() {
-		super.finishConfiguration();
-		
-		
+	public void setupStage4FinishConfiguration() {
+		super.setupStage4FinishConfiguration();
 		
 		this.getSchedule().scheduleOnce(
-				new RSteppable.UntilComplete<TestOutbreak>(10000) {
+				new RSteppable.UntilComplete<Outbreak>(10000) {
 					@Override
-					public void doStep(TestOutbreak s) {
+					public void doStep(Outbreak s) {
 						log.info("Simulation {} at step {}: {} Susceptible; {} Infected; {} Recovered; {} Incidence; {} Rt; {} positivity; {} mean contact rate",
-									getId(),
+									getUrn(),
 									s.getSchedule().getSteps(),
-									TestOutbreak.this.getLastNamedObservation(State.SUSCEPTIBLE, Long.class).orElse((long) s.getConfiguration().getPopulationSize()),
-									TestOutbreak.this.getLastNamedObservation(State.INFECTED, Long.class).orElse(0L),
-									TestOutbreak.this.getLastNamedObservation(State.RECOVERED, Long.class).orElse(0L),
-									TestOutbreak.this.getLastNamedObservation(Observations.INCIDENCE, Long.class).orElse(0L),
+									Outbreak.this.getLastNamedObservation(State.SUSCEPTIBLE, Long.class).orElse((long) s.getConfiguration().getPopulationSize()),
+									Outbreak.this.getLastNamedObservation(State.INFECTED, Long.class).orElse(0L),
+									Outbreak.this.getLastNamedObservation(State.RECOVERED, Long.class).orElse(0L),
+									Outbreak.this.getLastNamedObservation(Observations.INCIDENCE, Long.class).orElse(0L),
 									s.getRtEffective(),
 									s.testPositivity(),
 									s.contactRates()
@@ -132,8 +151,8 @@ public class TestOutbreak extends RSimulation<TestOutbreak,
 	
 
 	@Override
-	protected void finishParameterisation() {
-		super.finishParameterisation();
+	public void setupStage7FinishParameterisation() {
+		super.setupStage7FinishParameterisation();
 		
 		for (int i=0; i<this.getConfiguration().getImportedInfectionCount(); i++) {
 			int id = (int) (this.sampler().uniform()*this.getConfiguration().getPopulationSize());
@@ -150,11 +169,11 @@ public class TestOutbreak extends RSimulation<TestOutbreak,
 		return this.getLastNamedObservation(State.INFECTED.name(), Long.class);
 	}
 
-	protected SimpleWeightedGraph<TestAgent, TestAgent.Relationship> getContactNetwork() {
+	protected SimpleWeightedGraph<Person, Person.Relationship> getContactNetwork() {
 		return contacts;
 	}
 	
-	protected DirectedAcyclicGraph<TestAgent, TestAgent.Infection> getInfectionNetwork() {
+	protected DirectedAcyclicGraph<Person, Person.Infection> getInfectionNetwork() {
 		return infections;
 	}
 	
@@ -234,6 +253,8 @@ public class TestOutbreak extends RSimulation<TestOutbreak,
 		// Otherwise it will stay as it was
 		
 	}
+
+	
 	
 	
 	
