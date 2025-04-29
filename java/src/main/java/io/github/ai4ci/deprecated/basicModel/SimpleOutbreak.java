@@ -1,4 +1,4 @@
-package io.github.ai4ci.basicModel;
+package io.github.ai4ci.deprecated.basicModel;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -8,7 +8,7 @@ import java.util.stream.Collectors;
 import org.apache.commons.math3.analysis.solvers.BrentSolver;
 import org.apache.commons.math3.util.MathArrays;
 
-import io.github.ai4ci.basicModel.Person.Status;
+import io.github.ai4ci.deprecated.basicModel.Person.Status;
 import sim.engine.SimState;
 import sim.engine.Steppable;
 import sim.field.continuous.Continuous2D;

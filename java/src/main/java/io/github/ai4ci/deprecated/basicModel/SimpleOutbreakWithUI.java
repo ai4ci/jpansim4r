@@ -1,4 +1,4 @@
-package io.github.ai4ci.basicModel;
+package io.github.ai4ci.deprecated.basicModel;
 
 import java.awt.Color;
 import java.awt.Graphics2D;

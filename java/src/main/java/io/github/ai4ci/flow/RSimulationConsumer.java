@@ -1,7 +1,5 @@
 package io.github.ai4ci.flow;
 
-import java.io.File;
-import java.io.FileWriter;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
@@ -9,16 +7,12 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Flow;
 import java.util.concurrent.Flow.Subscription;
 import java.util.concurrent.ThreadPoolExecutor;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
-
-import org.apache.commons.csv.CSVFormat;
-import org.apache.commons.csv.CSVPrinter;
 
 import io.github.ai4ci.RAgent;
 import io.github.ai4ci.RObservedSimulation;
 import io.github.ai4ci.RSimulation;
 import io.github.ai4ci.RSimulationRunnable;
+import io.github.ai4ci.data.RSimulationExporter;
 import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
@@ -34,33 +28,32 @@ public class RSimulationConsumer<
 	> implements Flow.Subscriber<RObservedSimulation<S,A>> {
 
 	ThreadPoolExecutor executor;
-	List<ResultWriter> writers = new ArrayList<>();
-	Monitor monitor;
+	List<RSimulationExporter<S,A>> writers = new ArrayList<>();
+	RSimulationMonitor monitor;
 	String directory;
 	boolean paused = true;
 	boolean upstreamComplete = false;
 	boolean complete = false;
-	
+	int maxSteps;
+	Thread shutdown = new Thread() {
+		@Override
+		public void run() {
+			super.run();
+			RSimulationConsumer.this.shutdown();
+		}
+	};
 
-	public RSimulationConsumer(String directory, int maxThreads) {
+	public RSimulationConsumer(String directory, int maxThreads, int maxMemGb, int maxSteps, int totalSimulations) {
 		// ThreadFactory threadFactory = Executors.defaultThreadFactory();
 		this.directory = directory;
 		this.executor = (ThreadPoolExecutor) Executors.newFixedThreadPool(maxThreads);
         //start the monitoring thread
         log.info("[consumer] setting up simulation consumer with base directory: "+directory);
-        monitor = new Monitor(this, 3);
-        
+        monitor = new RSimulationMonitor(this, 3, maxMemGb, totalSimulations);
+        this.maxSteps = maxSteps;
         Thread monitorThread = new Thread(monitor,"monitor");
         monitorThread.start();
-        Runtime.getRuntime().addShutdownHook(
-    		new Thread() {
-				@Override
-				public void run() {
-					super.run();
-					RSimulationConsumer.this.shutdown();
-				}
-    			
-		});
+        Runtime.getRuntime().addShutdownHook(shutdown);
 	}
 	
 	public RSimulationConsumer<S, A> start() {
@@ -78,6 +71,7 @@ public class RSimulationConsumer<
 			
 		}
         monitor.shutdown();
+        Runtime.getRuntime().removeShutdownHook(shutdown);
 	}
 
 	public boolean idle() {
@@ -95,123 +89,32 @@ public class RSimulationConsumer<
 //		}
 //	}
 
-	public static class Monitor implements Runnable {
-		private RSimulationConsumer<?,?> pool;
-		private int seconds;
-		private boolean run = true;
-		private int uncommitted;
-
-		public Monitor(RSimulationConsumer<?,?> pool, int delay) {
-			this.pool = pool;
-			this.seconds=delay;
-			uncommitted = pool.executor.getCorePoolSize();
-		}
-
-		public void shutdown(){
-			log.info("[monitor] shutting down monitor.");
-			this.run=false;
-		}
-		
-		@Override
-		public void run() {
-			log.info("[monitor] Initialising monitor thread");
-			while(run){
-				Runtime runtime = Runtime.getRuntime();
-				long allocatedMemory = runtime.totalMemory() - runtime.freeMemory();
-				long presumableFreeMemory = runtime.maxMemory() - allocatedMemory;
-				long mbMax = runtime.maxMemory() / (1024*1024);
-				long mbFree = presumableFreeMemory / (1024*1024);
-				log.info(
-						String.format("[monitor] [%d/%d] Active: %d, Completed: %d, Task: %d, Free memory: %dMb/%dMb" ,
-								this.pool.executor.getPoolSize(),
-								this.pool.executor.getCorePoolSize(),
-								this.pool.executor.getActiveCount(),
-								this.pool.executor.getCompletedTaskCount(),
-								this.pool.executor.getTaskCount(),
-								mbFree , mbMax)
-						);
-				try {
-					Thread.sleep(seconds*1000);
-				} catch (InterruptedException e) {
-					e.printStackTrace();
-				}
-				int freeThreads = this.pool.executor.getCorePoolSize() - this.pool.executor.getActiveCount();
-				// T
-				if (mbFree > 2*1024 && freeThreads > 0) {
-					// more than 2 Gb free and unused threads in pool.
-					if (!pool.paused && !pool.upstreamComplete && uncommitted > 0) {
-						log.info("[monitor] requesting a simulation to run: "+mbFree+" Mb free; "+freeThreads+" threads available; "+uncommitted+" uncommitted.");
-						pool.subscription.request(1);
-						uncommitted -= 1;
-					}
-				}
-			}
-			log.info("[monitor] monitor shut down complete.");
-		}
-
-		public void release() {
-			this.uncommitted += 1;
-			if (this.uncommitted > pool.executor.getCorePoolSize()) this.uncommitted = pool.executor.getCorePoolSize();
-		}
-	}
+//	public RSimulationConsumer<S,A> withResultWriter(String file, Enum<?>... names) throws IOException {
+//		log.info("[results] configuring writer: "+Stream.of(names).map(n -> n.name()).collect(Collectors.joining(","))+" to file: "+file);
+//		ResultWriter<S,A> rw = new ResultWriter<S,A>(this.directory, file, names);
+//		this.writers.add(rw);
+//		return this;
+//	}
 	
-	
-	
-	public RSimulationConsumer<S,A> withResultWriter(String file, Enum<?>... names) throws IOException {
-		log.info("[results] configuring writer: "+Stream.of(names).map(n -> n.name()).collect(Collectors.joining(","))+" to file: "+file);
-		ResultWriter rw = new ResultWriter(file, names);
-		this.writers.add(rw);
+	public RSimulationConsumer<S,A> withExporter(RSimulationExporter<S,A> exp) throws IOException {
+		this.writers.add(exp);
 		return this;
 	}
 	
-	private Runnable wrap(RSimulationRunnable<S,A> runnable) {
+	private Runnable wrap(RSimulationRunnable<S,A> runnable, int maxSteps) {
 		return new Runnable() {
 			@Override
 			public void run() {
-				runnable.run();
-				for (ResultWriter rs: writers) {
-					try {
-						runnable.appendCsv(rs.fw, rs.columns);
-						rs.fw.flush();
-						log.info("[results] writing output for: "+runnable.getObsSim().getSimulation().getUrn()+"; "+rs.file);
-					} catch (IOException e) {
-						log.warn("[results] could not write results for: "+runnable.getObsSim().getSimulation().getUrn()+"; "+rs.file+"; "+e.getMessage()); 
-					}
+				monitor.attach(runnable);
+				runnable.setTarget(maxSteps).run();
+				for (RSimulationExporter<S,A> rs: writers) {
+					rs.export(runnable.getObsSim());
 				}
-				monitor.release();
+				monitor.release(runnable);
 			}
 		};
 	}
 	
-	/**
-	 * This is a writer dedicated to a single file. It is a convenience for
-	 * specifying what observations are to be written to a file. The CSV printer
-	 * inside is passed 
-	 *  
-	 */
-	private class ResultWriter {
-		CSVPrinter fw;
-		String file;
-		List<String> columns;
-		
-		public ResultWriter(String file, Enum<?>... names) throws IOException {
-			columns = Stream.of(names).map(e -> e.name()).collect(Collectors.toList());
-			Stream.of("id","exportTimestep","timestep").forEach(columns::add);
-			log.info("[results] writing CSV output to: "+new File(directory,file).getAbsolutePath());
-			fw = new CSVPrinter(new FileWriter(new File(directory,file)),CSVFormat.RFC4180);
-			this.file = file;
-			// Write header.
-			fw.printRecord(columns);
-			fw.flush();
-		}
-		
-		public void close() {
-			try {
-				fw.close();
-			} catch (IOException e) {}
-		}
-	}
-
 	Subscription subscription;
 
 	@Override
@@ -227,7 +130,7 @@ public class RSimulationConsumer<
 		RSimulationRunnable<S,A> simRunner = new RSimulationRunnable<S,A>(copy, this.directory);
 		log.info("[consumer] queued new simulation: "+simRunner.getObsSim().getSimulation().getUrn());
 		executor.execute(
-			this.wrap(simRunner)
+			this.wrap(simRunner, maxSteps)
 		);
 	}
 

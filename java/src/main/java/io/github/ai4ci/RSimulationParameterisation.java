@@ -7,7 +7,7 @@ import lombok.NonNull;
 /**
  * A Java bean defining global simulation initial parameterisation 
  */
-public interface RSimulationParameterisation extends RConfiguration,Serializable {
+public interface RSimulationParameterisation extends Serializable {
 	
 	@NonNull public String getParameterisationName();
 	

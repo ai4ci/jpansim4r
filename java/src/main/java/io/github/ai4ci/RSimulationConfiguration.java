@@ -14,7 +14,7 @@ import lombok.NonNull;
  * scenario, but with details that use different random seeds. Each of these
  * will have a bootstrap id. 
  */
-public interface RSimulationConfiguration extends RConfiguration, Serializable {
+public interface RSimulationConfiguration extends Serializable {
 	
 	@NonNull public String getConfigurationName();
 

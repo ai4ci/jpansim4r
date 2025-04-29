@@ -32,6 +32,13 @@ public class Binomial extends MutablePair<Integer,Integer> {
 		super(0, 0);
 	}
 	
+	public int getNumerator() {
+		return this.getLeft();	}
+	
+	public int getDenominator() {
+		return this.getRight();	}
+	
+	
 	public Binomial(int num, int denom) {
 		super(num,denom);
 	}

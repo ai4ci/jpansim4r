@@ -1,19 +1,5 @@
 package io.github.ai4ci;
 
-import static sim.engine.SimState.printlnSynchronized;
-
-import java.io.FileWriter;
-import java.io.IOException;
-import java.nio.file.Paths;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
-
-import org.apache.commons.csv.CSVFormat;
-import org.apache.commons.csv.CSVPrinter;
-
 import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
@@ -56,11 +42,24 @@ public class RSimulationRunnable<
 	long startStep;
 
 	public String progress() {
-		double rate = ((double) (step-startStep)) * 1000 / ((double) System.currentTimeMillis() - startedAt + 1);
-		if (target > 0) return String.format("%d/%d [%.1f%%] (%.1f per sec)", step, target, ((double) step)/((double) target), rate);
-		else return String.format("step %d (%.1f per sec)", step, rate);
+		String tmp;
+		if (obsSim.state.compareTo(RObservedSimulation.State.RUNNING)<0) tmp = "not started.";
+		else if (obsSim.state.equals(RObservedSimulation.State.COMPLETE)) tmp = "completed.";
+		else if (this.isPaused()) tmp="paused.";
+		else {
+			double rate = ((double) (step-startStep)) * 1000 / ((double) System.currentTimeMillis() - startedAt + 1);
+			if (target > 0) 
+				tmp=String.format("%d/%d [%.1f%%] (%.1f per sec)", step, target, ((double) step)/((double) target)*100, rate);
+			else 
+				tmp=String.format("step %d (%.1f per sec)", step, rate);
+		}
+		return obsSim.getSimulation().getUrn()+" ["+tmp+"]";
 	}
 
+	public boolean isComplete() {
+		return obsSim.state.equals(RObservedSimulation.State.COMPLETE);
+	}
+	
 	public String toString() {
 		return progress() + ": " +obsSim.getSimulation().getStepId();
 	}
@@ -96,7 +95,9 @@ public class RSimulationRunnable<
 		startedAt = System.currentTimeMillis();
 		startStep = obsSim.getSimulation().getSchedule().getSteps();
 		boolean simulationCompleted = false;
-		if (!quiet) printlnSynchronized(obsSim.toString()+" started at step "+startStep);
+		if (!quiet) 
+			// printlnSynchronized(obsSim.toString()+" started step "+step);
+			log.info(obsSim.toString()+" started at step "+startStep);
 		
 		try {
 			
@@ -113,17 +114,23 @@ public class RSimulationRunnable<
 				
 				
 				if (simulationCompleted) {
-					if (!quiet) printlnSynchronized(obsSim.toString()+" finished at step "+step);
+					if (!quiet) 
+						log.info(obsSim.toString()+" finished at step "+step);
+						// printlnSynchronized(obsSim.toString()+" finished at step "+step);
 				} else if (target > 0 && step >= target) {
 					simulationCompleted = true; 
-					if (!quiet) printlnSynchronized(obsSim.toString()+" ran to step "+step);
+					if (!quiet) 
+						log.info(obsSim.toString()+" ran to step "+step);
+						// printlnSynchronized(obsSim.toString()+" ran to step "+step);
 					
 				}
 				
 			}
 		} catch (InterruptedException e) {
 			// deal with interrupt.
-			if (!quiet) printlnSynchronized(obsSim.toString()+" interrupted at step "+step);
+			if (!quiet) 
+				log.info(obsSim.toString()+" interrupted at step "+step);
+				// printlnSynchronized(obsSim.toString()+" interrupted at step "+step);
 			
 		}
 		obsSim.state = RObservedSimulation.State.COMPLETE;
@@ -131,54 +138,7 @@ public class RSimulationRunnable<
 	}
 	
 	
-	public void writeCsv(String file, Enum<?>... names) throws IOException {
-		List<String> columns = Stream.of(names).map(e -> e.name()).collect(Collectors.toList());
-		Stream.of("id","exportTimestep","timestep").forEach(columns::add);
-		Appendable csvOut = new FileWriter(Paths.get(directory, file).toFile());
-		log.info("Writing simulation observations to: "+Paths.get(directory, file).toString());
-		try (CSVPrinter printer = new CSVPrinter(csvOut, CSVFormat.EXCEL)) {
-			printer.printRecord(columns);
-			appendCsv(printer, columns);
-		}
-	}
 	
-	public void appendCsv(CSVPrinter csvOut, List<String> columns) throws IOException {
-		if (!obsSim.getObservatory().isPresent()) {
-			log.debug("Csv output not pssible as no observatory is enabled");
-			return;
-		}
-		Map<Integer,Map<String,Map<String,List<?>>>> tmp = obsSim.getObservatory().get().observations(columns);
-		if (tmp.size() > 1) throw new IOException("Attempt to write non rectangular data to CSV");
-		//OutputStream outFile = Files.newOutputStream(csvOut, StandardOpenOption.CREATE, StandardOpenOption.WRITE);
-		
-		for (int i: tmp.keySet()) {
-				Map<String,Map<String,List<?>>> byName = tmp.get(i);
-				List<String> ids = new ArrayList<>();
-				ids.addAll(byName.get(columns.get(0)).keySet());
-				int rows =  byName.get(columns.get(0)).get(ids.get(0)).size();
-				for (int row = 0; row < rows; row++) {
-					for (String id: ids) {
-						List<Object> rowValues = new ArrayList<>();
-						for (String col: columns) {
-							Object value = null;
-							if (byName.containsKey(col)) {
-								value = byName.get(col).get(id).get(row);
-							} else if (col.equals("id")) {
-								value = id;
-							} else if (col.equals("exportTimestep")) {
-								value = this.obsSim.getSimulation().getSimTime().intValue();
-							} else if (col.equals("timestep")) {
-								value = this.obsSim.getSimulation().getSimTime() - (row+1);
-							}
-							rowValues.add(value);
-						}
-						csvOut.printRecord(rowValues);
-					}
-				}
-			}; 
-			
-		
-	}
 
 
 }

@@ -1,10 +1,8 @@
 package io.github.ai4ci.flow;
 
-import java.lang.reflect.InvocationTargetException;
+
 import java.time.LocalDate;
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.ThreadPoolExecutor;
 
@@ -12,39 +10,47 @@ import org.apache.commons.lang3.SerializationUtils;
 import org.apache.commons.lang3.tuple.Pair;
 
 import io.github.ai4ci.RAgent;
-import io.github.ai4ci.RAgentObserver;
 import io.github.ai4ci.RObservedSimulation;
 import io.github.ai4ci.RObservedSimulation.State;
+import io.github.ai4ci.RObserver;
 import io.github.ai4ci.RSimulation;
 import io.github.ai4ci.RSimulationConfiguration;
-import io.github.ai4ci.RSimulationObserver;
+import io.github.ai4ci.RSimulationFactory;
 import io.github.ai4ci.RSimulationParameterisation;
 import lombok.extern.slf4j.Slf4j;
 
+/**
+ * Builds a configured and parameterised model.
+ * @param <S>
+ * @param <C>
+ * @param <P>
+ * @param <A>
+ */
 @Slf4j
-public class RSimulationFactory<
+public class RSimulationPipeline<
 	S extends RSimulation<S,C,P,A>, 
 	C extends RSimulationConfiguration, 
 	P extends RSimulationParameterisation,
 	A extends RAgent<A,S,?,?>> {
 
-	Class<S> simulationType;
+	// Class<S> simulationType;
+	
 	String directory;
 	boolean useCache;
-	
+	RSimulationFactory<S,C,P,A> factory;
 	long seedBase = 0;
 	LocalDate reproduceAt = LocalDate.now();
 //	List<C> configurations = new ArrayList<C>();
 //	List<P> parameterisations = new ArrayList<P>();
-	List<RSimulationObserver<S,?>> simulationObservers = new ArrayList<RSimulationObserver<S,?>>();
-	List<RAgentObserver<? extends A,?>> agentObservers = new ArrayList<RAgentObserver<? extends A,?>>();
+	List<RObserver<S,?>> simulationObservers = new ArrayList<RObserver<S,?>>();
+	List<RObserver<? extends A,?>> agentObservers = new ArrayList<RObserver<? extends A,?>>();
 	
 	
 	// Base builder constructors
 	
-	private RSimulationFactory(Class<S> simulationType, String directory, boolean useCache) {
-		this.simulationType = simulationType;
+	private RSimulationPipeline(RSimulationFactory<S,C,P,A> factory, String directory, boolean useCache) {
 		this.directory = directory;
+		this.factory = factory;
 		this.useCache = useCache;
 		log.info("[pipeline] setting up simulation factory: "+directory);
 	}
@@ -65,8 +71,8 @@ public class RSimulationFactory<
 			C extends RSimulationConfiguration, 
 			P extends RSimulationParameterisation,
 			A extends RAgent<A,S,?,?>> 
-		RSimulationFactory<S,C,P,A> ofType(Class<S> simulationType, String directory, boolean useCache) {
-		return new RSimulationFactory<S,C,P,A>(simulationType, directory, useCache); 
+		RSimulationPipeline<S,C,P,A> ofType(RSimulationFactory<S,C,P,A> factory, String directory, boolean useCache) {
+		return new RSimulationPipeline<S,C,P,A>(factory, directory, useCache); 
 	}
 	
 //	// Base builder fluent methods
@@ -97,27 +103,22 @@ public class RSimulationFactory<
 //		return this;
 //	}
 	
-	public RSimulationFactory<S,C,P,A> withLocalDate(LocalDate reproduceAt) {
+	public RSimulationPipeline<S,C,P,A> withLocalDate(LocalDate reproduceAt) {
 		this.reproduceAt = reproduceAt;
 		return this;
 	}
 	
-	@SafeVarargs
 	/**
 	 * Setup simulation observers to be added to each simulation.
 	 * @param observer
 	 * @return
 	 */
-	public final RSimulationFactory<S,C,P,A> withObserver(RSimulationObserver<S,?>... observer) {
-		return this.withObservers(Arrays.asList(observer));
-	}
-	
-	public RSimulationFactory<S,C,P,A> withObservers(Collection<RSimulationObserver<S,?>> observers) {
-		this.simulationObservers.addAll(observers);
+	public final RSimulationPipeline<S,C,P,A> withObserver(RObserver<S,?> observer) {
+		this.simulationObservers.add(observer);
 		return this;
 	}
 	
-	public final RSimulationFactory<S,C,P,A> withAgentObserver(RAgentObserver<? extends A,?> observer) {
+	public final RSimulationPipeline<S,C,P,A> withAgentObserver(RObserver<? extends A,?> observer) {
 		this.agentObservers.add(observer);
 		return this;
 	}
@@ -132,16 +133,9 @@ public class RSimulationFactory<
 	 */
 	public RSimulationSupplier<S,A> initialise(ThreadPoolExecutor executor) {
 		return new RSimulationSupplier<S,A>(() -> {
-			try {
-				S simulation = simulationType.getDeclaredConstructor().newInstance();
-				RObservedSimulation<S,A> obsSim = new RObservedSimulation<S,A>(simulation);
-				return obsSim;
-			} catch (InstantiationException | IllegalAccessException | IllegalArgumentException
-					| NoSuchMethodException | SecurityException e) {
-				throw new RuntimeException(simulationType.getName()+" must provide a norgs public constructor",e);
-			} catch (InvocationTargetException e) {
-				throw new RuntimeException(e.getCause());
-			}
+			S simulation = factory.setupStage0ConstructUnconfiguredSimulation();
+			RObservedSimulation<S,A> obsSim = new RObservedSimulation<S,A>(simulation);
+			return obsSim;
 		}, executor);
 	}
 	
@@ -160,13 +154,13 @@ public class RSimulationFactory<
 		copy.getSimulation().setConfigurationBootstrapId(config.getKey());
 		copy.getSimulation().setSeed(seedBase);
 		copy.getSimulation().setConfiguration(config.getValue());
-		log.debug("[pipeline] initialised simulation configuration bootstrap {}", copy.getSimulation().getUrn());
-		copy.getSimulation().setupStage1BeginConfiguration();
+		log.info("[pipeline] initialised simulation configuration bootstrap {}", copy.getSimulation().getUrn());
+		factory.setupStage1BeginConfiguration(copy.getSimulation());
 		log.debug("[pipeline] building agents {}", copy.getSimulation().getUrn());
-		copy.getSimulation().setupStage2CreateAgents();
+		factory.setupStage2CreateAgents(copy.getSimulation());
 		log.debug("[pipeline] setting agents baselines {}", copy.getSimulation().getUrn());
-		copy.getSimulation().streamAgents().forEach(a -> a.setupStage3SetAgentBaseline());
-		copy.getSimulation().setupStage4FinishConfiguration();
+		copy.getSimulation().streamAgents().forEach(a -> factory.setupStage3SetAgentBaseline(a));
+		factory.setupStage4FinishConfiguration(copy.getSimulation());
 		if (this.simulationObservers.size() + this.agentObservers.size() > 0) {
 			log.debug("[pipeline] setting up simulation observatory {}", copy.getSimulation().getUrn());
 			copy.initialiseObservatory();
@@ -177,7 +171,7 @@ public class RSimulationFactory<
 					a -> copy.getObservatory().get().observeAgents(a)
 					);
 		}
-		log.debug("[pipeline] finishing configuration {}", obsSim.getSimulation().getUrn());
+		log.info("[pipeline] finishing configuration {}", obsSim.getSimulation().getUrn());
 		copy.setState(State.CONFIGURED);
 		return copy;
 	}
@@ -209,11 +203,11 @@ public class RSimulationFactory<
 		copy.getSimulation().setParameterisationBootstrapId(parameterisation.getKey());
 		copy.getSimulation().setSeed(seedBase);
 		copy.getSimulation().setParameterisation(parameterisation.getValue());
-		log.debug("[pipeline] starting parameterisation {}", copy.getSimulation().getUrn());
-		copy.getSimulation().setupStage5StartParameterisation();
-		copy.getSimulation().streamAgents().forEach(a -> a.setupStage6InitialiseAgentStatus());
-		copy.getSimulation().setupStage7FinishParameterisation();
-		log.debug("[pipeline] finishing parameterisation {}", copy.getSimulation().getUrn());
+		log.info("[pipeline] starting parameterisation {}", copy.getSimulation().getUrn());
+		factory.setupStage5StartParameterisation(copy.getSimulation());
+		copy.getSimulation().streamAgents().forEach(a -> factory.setupStage6InitialiseAgentStatus(a));
+		factory.setupStage7FinishParameterisation(copy.getSimulation());
+		log.info("[pipeline] finishing parameterisation {}", copy.getSimulation().getUrn());
 		copy.setState(State.PARAMETERISED);
 		return copy;
 	}
@@ -228,22 +222,13 @@ public class RSimulationFactory<
 	 * @param bootstrapId
 	 * @return a new obsSim clone with different bootstrap id and seed
 	 */
-	public RObservedSimulation<S,A> bootstrapExecutions(RObservedSimulation<S,A> obsSim, int bootstrapId) {
-		log.debug("[pipeline] execution simulation bootstrap {}", bootstrapId);
+	public RObservedSimulation<S,A> bootstrap(RObservedSimulation<S,A> obsSim, int bootstrapId) {
 		RObservedSimulation<S,A> copy = SerializationUtils.clone(obsSim);
 		copy.getSimulation().setExecutionBootstrapId(bootstrapId);
 		copy.getSimulation().setSeed(seedBase);
-		
-		if (copy.hasNamedObservers()) {
-			copy.initialiseObservatory();
-			copy.getSimulation().getObservers().forEach(o ->
-			copy.getObservatory().get().registerNamedObserver(o)
-					);
-			copy.getSimulation().streamAgents().forEach(a ->
-			a.getObservers().forEach(o ->
-			copy.getObservatory().get().registerNamedObserver(o)));
-		}
-		
+		log.debug("[pipeline] execution simulation bootstrap: {}",  copy.getSimulation().getUrn());
+		copy.initialiseObservatory();
+		// if (copy.hasNamedObservers()) { copy.initialiseObservatory(); }
 		copy.getSimulation().start();
 		copy.getSimulation().initialiseScheduler();
 		copy.getObservatory().ifPresent(o -> o.initialiseScheduler());

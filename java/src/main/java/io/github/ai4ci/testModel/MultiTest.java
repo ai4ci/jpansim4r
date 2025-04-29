@@ -1,7 +1,10 @@
 package io.github.ai4ci.testModel;
 
 import java.io.IOException;
-import java.util.Arrays;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.util.Optional;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadPoolExecutor;
 
@@ -10,83 +13,169 @@ import org.apache.logging.log4j.Level;
 import org.apache.logging.log4j.core.config.Configurator;
 import org.apache.logging.log4j.core.config.DefaultConfiguration;
 
-import io.github.ai4ci.Bootstraps;
-import io.github.ai4ci.RObservedSimulation;
-import io.github.ai4ci.flow.RSimulationConsumer;
-import io.github.ai4ci.flow.RSimulationFactory;
-import io.github.ai4ci.stats.DelayDistribution;
-import io.github.ai4ci.testModel.Configuration.AgentStatus.State;
-import io.github.ai4ci.testModel.Configuration.OutbreakConfig;
-import io.github.ai4ci.testModel.Configuration.OutbreakConfig.OutbreakConfigBuilder;
-import io.github.ai4ci.testModel.Configuration.OutbreakParameters;
-import io.github.ai4ci.testModel.Configuration.OutbreakParameters.Control;
-import io.github.ai4ci.testModel.Configuration.OutbreakParameters.OutbreakParametersBuilder;
-import io.github.ai4ci.testModel.Outbreak.Observations;
-import io.reactivex.rxjava3.core.Flowable;
-import io.reactivex.rxjava3.internal.operators.single.SingleFromUnsafeSource;
+import com.fasterxml.jackson.annotation.JsonInclude.Include;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 
-public class Test {
+import io.github.ai4ci.RObservatory;
+import io.github.ai4ci.RObserved;
+import io.github.ai4ci.data.Dataframe;
+import io.github.ai4ci.data.RSimulationExporter;
+import io.github.ai4ci.flow.Bootstraps;
+import io.github.ai4ci.flow.RSimulationConsumer;
+import io.github.ai4ci.flow.RSimulationPipeline;
+import io.github.ai4ci.testModel.Configuration.OutbreakConfig;
+import io.github.ai4ci.testModel.Configuration.OutbreakParameters;
+import lombok.extern.slf4j.Slf4j;
+
+@Slf4j
+public class MultiTest {
 
 	public static enum Observers {SUSCEPTIBLE, MOBILITY}
-	
-	public static void main(String[] args) throws IOException, InterruptedException {
-		
-		String directory = SystemUtils.getUserHome().toPath().resolve("tmp").toString();
-		
+	public static enum AgentObservers {EXPOSED_DATE, INFECTOR}
+
+	public static void main(String[] args) throws IOException {
 		Configurator.initialize(new DefaultConfiguration());
-	    Configurator.setRootLevel(Level.DEBUG);
+		Configurator.setRootLevel(Level.DEBUG);
 		
-		OutbreakConfigBuilder defaultConfig = OutbreakConfig.builder()
-				.configurationName("default-test")
-				.populationSize(100000)
-				.connectedness(40)
-				.meanContactProbability(0.5)
-				.networkRandomness(0.25)
-				.R0(2.0)
-				.importedInfectionCount(30)
-				;
+		Path home = SystemUtils.getUserHome().toPath().resolve("simulation");
+		Files.createDirectories(home.resolve("config"));
 		
-		OutbreakParametersBuilder defaultParam = OutbreakParameters.builder()
-				.contactRecordedProbability(0.5)
-				.infectivityProfile(DelayDistribution.fromCounts(1.0D, 0,0,1,2,2,1,1,1,1))
-				.meanTestDelay(7)
-				.sdTestDelay(1)
-				.testTakenProbabilityProfile(DelayDistribution.fromProbabilities(0D,0D,0D,0D,0.5D,0.5D,0.5D,0.5D,0.25D,0.25D))
-				.testSensitivity(0.8)
-				.testSpecificity(0.99)
-				.lockdownContactRate(3)
-				.highCasesLockdownInitiatedTrigger(2000)
-				.lowCasesLockdownReleaseTrigger(200)
-				
-			; 
+		while (Files.list(home.resolve("config"))
+			.filter(p -> p.getFileName().toString().endsWith(".yaml")).count() > 0) {
+			
+			Optional<Path> tmp = Files.list(home.resolve("config"))
+			.filter(p -> p.getFileName().toString().endsWith(".yaml"))
+			.findFirst();
+			
+			if (tmp.isPresent()) {
+				Path file = tmp.get();
+				Path temp = file.resolveSibling(file.getFileName()+".processing");
+				if (!Files.exists(temp)) {
+					// prevents race condition.
+					Files.move(file, temp, StandardCopyOption.ATOMIC_MOVE);
+					log.info("found simulation configuration: "+file);
+					boolean success = doSim(home,temp);
+					if (success) Files.move(temp, file.resolveSibling(file.getFileName()+".done"), StandardCopyOption.REPLACE_EXISTING);
+				} 
+			};
+			
+		}
 		
-		//Flowable.fromSingle(SingleFromUnsafeSource.fromSupplier(RObservedSimulation.uninitialised(Outbreak.class)));
-		
-		ThreadPoolExecutor executor = (ThreadPoolExecutor) Executors.newFixedThreadPool(4);
-		RSimulationFactory<Outbreak, OutbreakConfig, OutbreakParameters, Person> factory = 
-				RSimulationFactory
-					.ofType(Outbreak.class, directory, false);
-					
-		
-		RSimulationConsumer<Outbreak, Person> pool = 
-			factory.initialise(executor)
-				.attach("configure", Bootstraps.from(2 /*3*/, defaultConfig.build()), factory::configure)
-				.attach("parameterise", Bootstraps.from(1 /*3*/, 
-						defaultParam.control(Control.NONE).parameterisationName("no-control").build(),
-						defaultParam.control(Control.LOCKDOWN).parameterisationName("lockdown").build(),
-						defaultParam.control(Control.RISK_AVOIDANCE).parameterisationName("risk-avoid").build()
-					), factory::parameterise)
-				.attach("bootstrap 2", Arrays.asList(0 /*,1,2*/), factory::bootstrapExecutions)
-				.process(directory,4)
-				.withResultWriter(
-					"incidence.csv", 
-					Observations.INCIDENCE, Observations.CONTACT_RATES, Observations.TEST_POSITIVES, Observations.TESTS_PERFORMED, Observations.RT_EFFECTIVE,
-					State.SUSCEPTIBLE, State.INFECTED, State.RECOVERED
-				)
-				.start();
-		
-		while (!pool.idle()) Thread.sleep(10000);
+		log.info("no more simulations found.");
 		System.exit(0);
+	}
+	
+	public static boolean doSim(Path home, Path file) {
+		
+		ObjectMapper om = new ObjectMapper(new YAMLFactory());
+		om.enable(SerializationFeature.INDENT_OUTPUT);
+		om.setSerializationInclusion(Include.NON_NULL);
+		
+		ExecutionConfiguration execution;
+		String output = file.getFileName().toString().replace(".yaml.processing", "");
+		try {
+			execution = om.readerFor(ExecutionConfiguration.class).readValue(file.toFile());
+			Files.createDirectories(home.resolve(output));
+			om.writeValue(home.resolve(output).resolve(output+".yaml").toFile(), execution);
+			System.out.println("Config file read from: " + file.toString());
+		} catch (IOException e) {
+			System.out.println("Failed to read from: " + file.toString());
+			throw new RuntimeException(e);
+		}
+		
+		
+		if (execution.isDebug()) {
+			Configurator.setRootLevel(Level.DEBUG);
+		} else {
+			Configurator.setRootLevel(Level.INFO);
+		}
+		
+		String directory = home.resolve(output).toString();
+
+		//Flowable.fromSingle(SingleFromUnsafeSource.fromSupplier(RObservedSimulation.uninitialised(Outbreak.class)));
+
+		ThreadPoolExecutor executor = (ThreadPoolExecutor) Executors.newFixedThreadPool(4);
+		Builder factory = new Builder();
+		RSimulationPipeline<Outbreak, OutbreakConfig, OutbreakParameters, Person> pipeline = 
+				RSimulationPipeline.ofType(factory, directory, false);
+
+
+		RSimulationConsumer<Outbreak, Person> pool;
+		try {
+			pool = pipeline.initialise(executor)
+			.attach("configure", execution.bootstrapConfiguration(), pipeline::configure)
+			.attach("parameterise", execution.bootstrapParamterisation(), pipeline::parameterise)
+			.attach("bootstrap", Bootstraps.range(execution.getExecutionBootstraps()), pipeline::bootstrap)
+			.process(directory, 
+					execution.getMaxThreads(), 
+					execution.getMaxMemoryGb(),
+					execution.getMaxSimulationLength(),
+					execution.totalSimulations()
+					)
+			.withExporter(RSimulationExporter.csvFromObserver(
+					directory, "incidence.csv",
+					Dataframe.map(
+							RObservatory.class,
+							Dataframe.pull("time", s -> s.getHistoricalSteps()),
+							RObserved.data(Outbreak.RT_EFFECTIVE_HX),
+							RObserved.data(Outbreak.SUSCEPTIBLE_COUNT),
+							RObserved.data(Outbreak.INCIDENCE_COUNT),
+							RObserved.data(Outbreak.RECOVERED_COUNT),
+							RObserved.data(Outbreak.INFECTED_COUNT),
+							RObserved.data(Outbreak.SYMPTOM_ONSET_COUNT),
+							RObserved.data(Outbreak.TEST_POS_HX),
+							RObserved.data(Outbreak.TEST_TAKEN_HX),
+							RObserved.data(Outbreak.CONTACT_RATE_HX),
+							RObserved.data(Outbreak.KNOWN_POSITIVE_COUNT)
+							)
+					)
+			)
+			.withExporter(RSimulationExporter.csvFromAgents(
+					directory, "linelist.csv",
+					Dataframe.map(
+							Person.class,
+							Dataframe.pull("id2", p -> p.getId()),
+							RObserved.time(Person.PCR_POSITIVES),
+							RObserved.data(Person.PCR_POSITIVES, "contact_rate_ratio", s -> s.getContactRateAdjustment()),
+							RObserved.data(Person.PCR_POSITIVES, "last_infected_time", s -> s.getLastInfected()),
+							RObserved.data(Person.PCR_POSITIVES, "susceptibility", s -> s.getProbabilityInfectionGivenInfectiousContact()) //,
+							//Dataframe.pull("infectorId", p -> p.getLastInfector() )
+							)
+					)
+			)
+			.withExporter(RSimulationExporter.csvFromAgents(
+					directory, "testagent.csv",
+					Dataframe.map(
+							Person.class,
+							Dataframe.pull("id2", p -> p.getId()),
+							RObserved.time(Person.TEST_AGENT),
+							RObserved.data(Person.TEST_AGENT, "contact_rate_ratio", s -> s.getContactRateAdjustment()),
+							RObserved.data(Person.TEST_AGENT, "last_infected_time", s -> s.getLastInfected()),
+							RObserved.data(Person.TEST_AGENT, "susceptibility", s -> s.getProbabilityInfectionGivenInfectiousContact()),
+							RObserved.data(Person.TEST_AGENT, "infection_risk", s -> s.getInfectionRisk()),
+							RObserved.data(Person.TEST_AGENT, "observed_infection_risk", s -> s.getKnownInfectionRisk())
+							//Dataframe.pull("infectorId", p -> p.getLastInfector() )
+							)
+					)
+					)
+			.start();
+			
+			while (!pool.idle()) Thread.sleep(10000);
+			
+			pool.shutdown();
+			return true;
+		} catch (IOException | InterruptedException e) {
+			e.printStackTrace();
+			log.info("An error occurred in the simulation: "+output);
+			return false;
+		}
+
+		
+		
+		
+		
 		
 	}
 

@@ -53,7 +53,7 @@ public abstract class RSimulation<
 		C extends RSimulationConfiguration,
 		P extends RSimulationParameterisation,
 		A extends RAgent<A,S,?,?>
-	> extends SimState implements Serializable, RObservable {
+	> extends SimState implements Serializable, RObservable<S> {
 
 	public RSimulation() {
 		super(0L);
@@ -84,7 +84,7 @@ public abstract class RSimulation<
 	private int configBootstrapId = 0;
 	private int paramBootstrapId = 0;
 	private int executionBootstrapId = 0;
-	private ConcurrentMap<String, RSimulationObserver<S,?>> observers = new ConcurrentHashMap<>();
+	private ConcurrentMap<String, RObserver<S,?>> observers = new ConcurrentHashMap<>();
 	transient private ConcurrentMap<String, Object> cache = new ConcurrentHashMap<>();
 	private Sampler sampler;
 	private boolean complete = false;
@@ -128,7 +128,11 @@ public abstract class RSimulation<
 		return RSimulation.idFrom(getJobDate(), config, configBootstrapId, params, paramBootstrapId, executionBootstrapId, (int) this.schedule.getSteps());
 	}
 	
-	
+	public List<Long> getHistoricalSteps() {
+		List<Long> out = new ArrayList<>();
+		for (long i = this.getSimTime()-1; i>=0; i--) out.add(i);
+		return out;
+	}
 	
 	/**
 	 * Utility method to return a stats distribution random number sampler.
@@ -191,6 +195,21 @@ public abstract class RSimulation<
 	 */
 	protected abstract boolean checkComplete();
 	
+	
+	
+	// @Override
+	@SuppressWarnings("unchecked")
+	public Stream<RObserver<S,?>> getObservers() {
+		return observers.values().stream();
+	}
+	
+	public Stream<RObserver<?,?>> getAllObservers() {
+		return Stream.concat(
+				observers.values().stream(),
+				streamAgents().flatMap(a -> a.getObservers())
+		);
+	}
+	
 	/**
 	 * Aim to use this as an internal function when we want to set up a 
 	 * specific historical variable for the model to use. e.g. a delayed 
@@ -202,45 +221,41 @@ public abstract class RSimulation<
 	 * @param observer
 	 * @param observatory
 	 */
-	// @Override
-	public void registerNamedObserver(RSimulationObserver<S,?> observer) {
-		this.observers.put(observer.getName(), observer);
-		observer.setSubject(self());
+	@Override
+	public void registerNamedObserver(RObserver<S,?> observer) {
+		RObserver<S,?> tmp = SerializationUtils.clone(observer);
+		this.observers.put(tmp.getName(), tmp);
+		tmp.setSubject(self());
 	}
 	
-	// @Override
-	public Stream<RSimulationObserver<S,?>> getObservers() {
-		return observers.values().stream();
-	}
-	
-	/**
-	 * Intended to be used in a specific simulation extension methods to allow the 
-	 * history of the simulation determine control measures.
-	 */
-	// @Override
-	@SuppressWarnings("unchecked")
-	public <X> List<X> getNamedObservation(String name, Class<X> type) {
-		RSimulationObserver<S,?> obs = this.observers.get(name);
-		if (obs == null) throw new RuntimeException("Observer name not defined in simulation: "+name);
-		if (!obs.getObservationType().equals(type)) throw new RuntimeException("Incorrect type specified for observer of name: "+name+" ["+type.getName()+" requested; "+obs.getObservationType()+" found]");
-		return (List<X>) obs.getObservation();
-	}
-	
-	public <X> List<X> getNamedObservation(Enum<?> enu, Class<X> type) {
-		return getNamedObservation(enu.name(),type);
-	}
-
-	public <X> Optional<X> getLastNamedObservation(Enum<?> enu, Class<X> type) {
-		return getLastNamedObservation(enu.name(),type);
-	}
-	
-	@SuppressWarnings("unchecked")
-	public <X> Optional<X> getLastNamedObservation(String name, Class<X> type) {
-		RSimulationObserver<S,?> obs = this.observers.get(name);
-		if (obs == null) throw new RuntimeException("Observer name not defined in simulation: "+name);
-		if (!obs.getObservationType().equals(type)) throw new RuntimeException("Incorrect type specified for observer of name: "+name+" ["+type.getName()+" requested; "+obs.getObservationType()+" found]");
-		return (Optional<X>) obs.getLastObservation();
-	}
+//	/**
+//	 * Intended to be used in a specific simulation extension methods to allow the 
+//	 * history of the simulation determine control measures.
+//	 */
+//	// @Override
+//	@SuppressWarnings("unchecked")
+//	public <X> List<X> getNamedObservation(String name, Class<X> type) {
+//		RObserver<S,?> obs = this.observers.get(name);
+//		if (obs == null) throw new RuntimeException("Observer name not defined in simulation: "+name);
+//		if (!obs.getObservationType().equals(type)) throw new RuntimeException("Incorrect type specified for observer of name: "+name+" ["+type.getName()+" requested; "+obs.getObservationType()+" found]");
+//		return (List<X>) obs.getObservation();
+//	}
+//	
+//	public <X> List<X> getNamedObservation(RObserver<S,X> obs) {
+//		return getNamedObservation(obs.getName(), obs.getObservationType());
+//	}
+//	
+//	@SuppressWarnings("unchecked")
+//	public <X> Optional<X> getLastNamedObservation(String name, Class<X> type) {
+//		RObserver<S,?> obs = this.observers.get(name);
+//		if (obs == null) throw new RuntimeException("Observer name not defined in simulation: "+name);
+//		if (!obs.getObservationType().equals(type)) throw new RuntimeException("Incorrect type specified for observer of name: "+name+" ["+type.getName()+" requested; "+obs.getObservationType()+" found]");
+//		return (Optional<X>) obs.getLastObservation();
+//	}
+//	
+//	public <X> Optional<X> getLastNamedObservation(RObserver<S,X> obs) {
+//		return getLastNamedObservation(obs.getName(), obs.getObservationType());
+//	}
 	
 	/**
 	 * The default implementation is an arraylist of agents
@@ -295,13 +310,13 @@ public abstract class RSimulation<
 	 * Get all of a specific subType of agents from the model.
 	 * @param <A>
 	 * @param <X>
-	 * @param agentSubType
+	 * @param type
 	 * @return
 	 */
 	@SuppressWarnings("unchecked")
-	public <X extends A> Stream<X> streamAgents(Class<X> agentSubType) {
+	public <X extends A> Stream<X> streamAgents(Class<X> type) {
 		return this.streamAgents()
-			.filter(a -> agentSubType.isAssignableFrom(a.getClass()))
+			.filter(a -> type.isAssignableFrom(a.getClass()))
 			.map(a -> (X) a);
 	};
 	
@@ -379,85 +394,7 @@ public abstract class RSimulation<
 	}
 	
 	
-	/**
-	 * The first phaze of the model configuration. At this stage the 
-	 * simulation has been initialised, with a configuration and
-	 * the configuration bootstrap id has been set, in case there are multiple 
-	 * model replicants. At this stage the model hss configuration but does not have agents and 
-	 * does not have parameterisation.   
-	 * 
-	 * Tasks for this method are:
-	 * 
-	 * 1) Setup the environments that the agents operate in. This maybe a 2DField or
-	 * a network or both, or something that we haven't thought of yet. In some
-	 * way it defines how the agents interact with each other. It also does
-	 * not need to exist. The simulation developer is responsible for 
-	 * wiring it up and making it available to the agent, ?and GUI.
-	 * 
-	 * 2) Setup and named observers that may be needed to retrieve the state or
-	 * history of the simulation, for the purposes of making decisions within the
-	 * simulation. This will be done by `registerNamedObserver`
-	 * 
-	 * Following this method the `createAgents` method is called.
-	 */
-	public abstract void setupStage1BeginConfiguration();
-
-	/**
-	 * This is a factory method and
-	 * is expected construct new agents with new Agent(this, ...). Calling this 
-	 * constructor adds an agent to the simulation so addAgent does nto need to 
-	 * be called.
-	 *  
-	 * Following this the agents will have their 
-	 * setupBaseline() method called so this is really just for creating the agents
-	 * and does not need to define their baseline configuration or initial state 
-	 * of the agent does not yet need to be defined.
-	 * 
-	 * Agents are expected to have a implementation 
-	 * with immutable baseline parameters created using the setupBaseline(), 
-	 * and mutable status object.
-	 * 
-	 * Once constructed we here manage any insertion of the agent 
-	 * into their environment is also done here. Once the agent is constructed
-	 * it will be wired into the schedule automatically, depending on their 
-	 * remainsActive() flag, and this does not need to be handled.
-	 * 
-	 * After each of the agents has been constructed then their setupBaseline
-	 * is called before the simulations `finishConfiguration` method is called.
-	 * Which will schedule the agents. 
-	 */
-	public abstract void setupStage2CreateAgents();
-
-	/**
-	 * This hook is called at the end of the configuration stage, prior to the
-	 * configured simulation being finalised and written to disk.
-	 * The default registers all the named observers with the scheduler and makes
-	 * sure they are triggered at the end of every round, and it makes sure that
-	 * `checkComplete` is called at the beginning of each cycle. Any 
-	 * extension to this method must call `super()`.
-	 */
-	public void setupStage4FinishConfiguration() {
-		log.debug(this.getUrn()+ " simulation configuration complete (stage 4).");
-	};
-
-	/**
-	 * By default a no-op. This is called once the simulation has been 
-	 * configured and agents created, and parameterisation initialised, but 
-	 * before the agents initial status/behaviour is set, it might be used to 
-	 * derive simulation wide values from the combination of configuration and 
-	 * parameterisation.
-	 */
-	public void setupStage5StartParameterisation() {}
 	
-	/**
-	 * This is called when all the parameterisation of the 
-	 * agents is complete. By this point all agents are in their start state.
-	 * It is possible this might be used to conditionally wire agents into 
-	 * their environments depending on their start conditions. 
-	 */
-	public void setupStage7FinishParameterisation() {
-		log.debug(this.getUrn()+ " simulation parameterisation complete (stage 7).");
-	}; 
 
 	protected int generateAgentId() {
 		return agents.size()-1;
@@ -649,5 +586,20 @@ public abstract class RSimulation<
 
 	public void setExecutionBootstrapId(int bootstrapId) {
 		this.executionBootstrapId = bootstrapId;
+	}
+	
+	//TODO: Change this approach so that the observer
+	@SuppressWarnings("unchecked")
+	public RObserver<S, Long> keepCount(String name, RObserver.Tester<A> tester) {
+		
+			RObserver<S, Long> tmp = RObserver.history((Class<S>) this.getClass(), name, Long.class,
+				s -> Optional.of(
+						s.streamAgents()
+						.filter(a -> tester.test(a))
+						.count()),
+				null
+			);
+			this.registerNamedObserver(tmp);
+			return tmp;
 	}
 }

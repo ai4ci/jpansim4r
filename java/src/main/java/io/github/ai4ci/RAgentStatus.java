@@ -5,6 +5,6 @@ import java.io.Serializable;
 /**
  * A Java Bean with the state of an agent 
  */
-public interface RAgentStatus extends RConfiguration, Serializable {
+public interface RAgentStatus extends Serializable {
 
 }

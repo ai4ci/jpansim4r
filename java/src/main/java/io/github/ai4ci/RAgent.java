@@ -25,24 +25,24 @@ import io.github.ai4ci.stats.Sampler;
  *  
  * then initialise status
  * 
- * @param <A>
- * @param <S>
- * @param <C>
- * @param <T>
+ * @param <A> Agent class.
+ * @param <S> Parent simulation class 
+ * @param <B> A baseline object. Construted once immutable
+ * @param <T> A status object. Mutable.
  */
 public abstract class RAgent<
 		A extends RAgent<A,S,B,T>, 
 		S extends RSimulation<S,?,?,A>,
 		B extends RAgentBaseline,
 		T extends RAgentStatus
-	> implements RSteppable<S>, Serializable, RObservable {
+	> implements RSteppable<S>, Serializable, RObservable<A> {
 
 	int id;
 	S simulation;
 	T status;
 	T oldStatus;
 	B baseline;
-	ConcurrentMap<String, RAgentObserver<A,?>> observers = new ConcurrentHashMap<>();
+	ConcurrentMap<String, RObserver<A,?>> observers = new ConcurrentHashMap<>();
 	transient ConcurrentMap<String,Object> cache = new ConcurrentHashMap<>();
 	
 	
@@ -57,39 +57,6 @@ public abstract class RAgent<
 		
 	}
 	
-	// INITIALISATION FUNCTIONS
-	
-	/**
-	 * Called during construction. Job is to construct the baseline configuration
-	 * for this agent and set it using setBaseline(). This is called immediately
-	 * after simulation configuration, and the method .getSimulation().getConfiguration()
-	 * will work but before parameterisation.
-	 * 
-	 * It is also expected to at this point register named observers that are
-	 * part of the agent, and which are used to drive behaviour of the agent.
-	 * These should be added with `registerNamedObserver()`. or using
-	 * the convenience methods keepHistory, keepFullHistory, keepLastValue, and 
-	 * keepHistoryList in the agent. 
-	 * 
-	 * @param <X>
-	 * @param configuration
-	 */
-	public abstract void setupStage3SetAgentBaseline();
-	
-	/**
-	 * Called during parameterisation. This gets called before the simulation starts
-	 * but both simulation configuration and parameterisation is complete and 
-	 * the agent baseline will be defined.
-	 * Tasks here are 
-	 * 1) construct and initialise the status JavaBean with values so that
-	 * it is ready to be updated during the stepping.
-	 * this is being done on a once per parameterisation bootstrap.
-	 * At this stage the model parameterisation is complete so the 
-	 * status can reference the simulation parameters or config, and a 
-	 * RNG generates log normal (e.g. sampler().logNormal()).
-	 * By the time this is finished the remainsActive() function must work. 
-	 */
-	public abstract void setupStage6InitialiseAgentStatus();
 	
 	
 	/**
@@ -146,7 +113,7 @@ public abstract class RAgent<
 		return Optional.ofNullable(oldStatus);
 	};
 	
-	protected void setStatus(T status) {
+	public void setStatus(T status) {
 		this.status = status;
 	};
 
@@ -154,7 +121,7 @@ public abstract class RAgent<
 		return baseline;
 	}
 
-	protected void setBaseline(B baseline) {
+	public void setBaseline(B baseline) {
 		this.baseline = baseline;
 	}
 
@@ -164,53 +131,30 @@ public abstract class RAgent<
 	
 	public Sampler sampler() {return getSimulation().sampler();}
 	
-	// @Override
-	public Stream<RAgentObserver<A,?>> getObservers() {
+	@Override
+	@SuppressWarnings("unchecked")
+	public Stream<RObserver<A,?>> getObservers() {
 		return observers.values().stream();
 	}
 	
-	// @Override
-	@SafeVarargs
-	public final void registerNamedObserver(RAgentObserver<A,?>... observers) {
-		for (RAgentObserver<A,?> observer: observers) {
-			this.observers.put(observer.getName(), observer);
-			observer.setSubject(self());
-		}
+	@Override
+	public final void registerNamedObserver(RObserver<A,?> observer) {
+		RObserver<A,?> tmp = SerializationUtils.clone(observer);
+		this.observers.put(tmp.getName(), tmp);
+		tmp.setSubject(self());
 	}
 	
-	@SuppressWarnings("unchecked")
-	public <X> void keepHistory(
-			Enum<?> name, Class<X> type, RAgentObserver.Mapper<A,X> mapper, int length) {
-		this.registerNamedObserver(
-			new RAgentObserver.History<A, X>((Class<A>) self().getClass(), name, type, mapper, length)
-		);
-	}
-	
-	@SuppressWarnings("unchecked")
-	public <X> void keepFullHistory(
-			Enum<?> name, Class<X> type, RAgentObserver.Mapper<A,X> mapper) {
-		this.registerNamedObserver(
-			new RAgentObserver.History<A, X>((Class<A>) self().getClass(), name, type, mapper, null)
-		);
-	}
-	
-	@SuppressWarnings("unchecked")
-	public <X> void keepLastValue(
-			Enum<?> name, Class<X> type, RAgentObserver.Mapper<A,X> mapper) {
-		this.registerNamedObserver(
-			new RAgentObserver.Last<A, X>((Class<A>) self().getClass(), name, type, mapper)
-		);
-	}
-	
-	@SuppressWarnings("unchecked")
-	public <X> void keepHistoryList(
-			Enum<?> name, Class<X> type, RAgentObserver.ListMapper<A,X> mapper, int length) {
-		this.registerNamedObserver(
-			new RAgentObserver.ListHistory<A, X>((Class<A>) self().getClass(), name, type, mapper, length)
-		);
-	}
+
 
 	@SuppressWarnings("unchecked")
+	/**
+	 * Cache 
+	 * @param <X>
+	 * @param name
+	 * @param type
+	 * @param mapper
+	 * @return an optional. It is empty if and only if the name is not found in the cache.
+	 */
 	public <X> Optional<X> cached(String name, Class<X> type, Function<A,Optional<X>> mapper) {
 		if (this.cache == null) this.cache = new ConcurrentHashMap<>();
 		if (!cache.containsKey(name)) {
@@ -235,33 +179,33 @@ public abstract class RAgent<
 		this.cache.clear();
 	}
 	
-	// @Override
-	@SuppressWarnings("unchecked")
-	public <X> List<X> getNamedObservation(Enum<?> name, Class<X> type) {
-		RAgentObserver<A,?> obs = this.observers.get(name.name());
-		if (obs == null) throw new RuntimeException("Observer name not defined in simulation: "+name);
-		if (!obs.getObservationType().equals(type)) throw new RuntimeException("Incorrect type specified for observer of name: "+name+" ["+type.getName()+" requested; "+obs.getObservationType()+" found]");
-		return (List<X>) obs.getObservation();
-	}
-	
-	@SuppressWarnings("unchecked")
-	public <X> Optional<X> getLastNamedObservation(Enum<?> name, Class<X> type) {
-		RAgentObserver<A,?> obs = this.observers.get(name.name());
-		if (obs == null) throw new RuntimeException("Observer name not defined in simulation: "+name);
-		if (!obs.getObservationType().equals(type)) throw new RuntimeException("Incorrect type specified for observer of name: "+name+" ["+type.getName()+" requested; "+obs.getObservationType()+" found]");
-		return (Optional<X>) obs.getLastObservation();
-	}
-	
-	@SuppressWarnings("unchecked")
-	public <X> List<List<? extends X>> getNamedListObservation(Enum<?> name, Class<X> subtype) {
-		RAgentObserver<A,?> obs = this.observers.get(name.name());
-		if (obs == null) throw new RuntimeException("Observer name not defined in simulation: "+name);
-		if (!obs.getObservationType().equals(subtype)) throw new RuntimeException("Incorrect type specified for observer of name: "+name+" ["+subtype.getName()+" requested; "+obs.getObservationType()+" found]");
-		if (!(obs instanceof RObserver.OfLists)) {
-			throw new RuntimeException("Observer is not a list observer: "+name+" ["+subtype.getName()+"]");
-		}
-		return ((RObserver.OfLists<A,X>) obs).getObservationList();
-	}
+//	// @Override
+//	@SuppressWarnings("unchecked")
+//	public <X> List<X> getNamedObservation(String name, Class<X> type) {
+//		RObserver<A,?> obs = this.observers.get(name);
+//		if (obs == null) throw new RuntimeException("Observer name not defined in simulation: "+name);
+//		if (!obs.getObservationType().equals(type)) throw new RuntimeException("Incorrect type specified for observer of name: "+name+" ["+type.getName()+" requested; "+obs.getObservationType()+" found]");
+//		return (List<X>) obs.getObservation();
+//	}
+//	
+//	@SuppressWarnings("unchecked")
+//	public <X> Optional<X> getLastNamedObservation(String name, Class<X> type) {
+//		RObserver<A,?> obs = this.observers.get(name);
+//		if (obs == null) throw new RuntimeException("Observer name not defined in simulation: "+name);
+//		if (!obs.getObservationType().equals(type)) throw new RuntimeException("Incorrect type specified for observer of name: "+name+" ["+type.getName()+" requested; "+obs.getObservationType()+" found]");
+//		return (Optional<X>) obs.getLastObservation();
+//	}
+//	
+//	@SuppressWarnings("unchecked")
+//	public <X> List<List<? extends X>> getNamedListObservation(String name, Class<X> subtype) {
+//		RObserver<A,?> obs = this.observers.get(name);
+//		if (obs == null) throw new RuntimeException("Observer name not defined in simulation: "+name);
+//		if (!obs.getObservationType().equals(subtype)) throw new RuntimeException("Incorrect type specified for observer of name: "+name+" ["+subtype.getName()+" requested; "+obs.getObservationType()+" found]");
+//		if (!(obs instanceof RObserver.OfLists)) {
+//			throw new RuntimeException("Observer is not a list observer: "+name+" ["+subtype.getName()+"]");
+//		}
+//		return ((RObserver.OfLists<A,X>) obs).getObservationList();
+//	}
 	
 	/** 
 	 * use in a flat map to get just specific sub-types of agent.
@@ -290,7 +234,6 @@ public abstract class RAgent<
 		return this.getSimulation().getSchedule().getSteps();
 	}
 
-	
 	/**
 	 * This gets called on every simulation step;
 	 * Tasks here are 
@@ -300,6 +243,7 @@ public abstract class RAgent<
 	 * as likely uses the same logic..
 	 * 2) important to decide here whether this agent is still active in the 
 	 * simulation.
+	 * 
 	 */
 	public abstract void updateStatus();
 	
@@ -314,20 +258,24 @@ public abstract class RAgent<
 	public abstract void changeBehaviour();
 
 	public Reference weakReference() {
-		return new Reference(this.id);
+		return new Reference(this.self());
 	};
 	
-	public class Reference implements Serializable {
+	public static class Reference {
 		
-		public Reference(int id) {
-			this.id = id;
+		public Reference(RAgent<?,?,?,?> agent) {
+			this.id = agent.id;
+			this.simulation = agent.simulation;
 		}
 		
 		int id;
+		RSimulation<?,?,?,?> simulation;
 		
-		public A resolve() {
-			return simulation.getAgentById(id);
+		@SuppressWarnings("unchecked")
+		public <A1 extends RAgent<A1,?,?,?>> A1 resolve(Class<A1> type) {
+			return (A1) simulation.getAgentById(id);
 		}
+		
 	}
 
 	public void copyStatus() {

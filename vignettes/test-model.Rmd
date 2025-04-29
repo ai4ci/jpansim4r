@@ -17,15 +17,60 @@ knitr::opts_chunk$set(
 ```{r}
 library(tidyverse)
 
-abm_raw = readr::read_csv("~/tmp/incidence.csv")
+abm_raw = readr::read_csv("~/simulation/simulation/screening/incidence.csv")
 
-abm = abm_raw %>% mutate(control = stringr::str_extract(id,"param:([^:]*)",1))
+abm = abm_raw %>% 
+  mutate(
+    param = stringr::str_extract(id,"param:([^:]*)",1),
+    cfg = stringr::str_extract(id,"cfg:([^:]*)",1),
+    control = paste0(cfg,":",param)
+  ) 
+```
 
-ggplot(abm, aes(x=timestep, y=INCIDENCE, colour = control, group = id))+geom_line()+scale_y_continuous(trans="log1p")
-ggplot(abm, aes(x=timestep, y=INFECTED, colour = control, group = id))+geom_line()#+scale_y_continuous(trans="log1p")
-ggplot(abm, aes(x=timestep, y=SUSCEPTIBLE, colour = control, group = id))+geom_line()
-ggplot(abm, aes(x=timestep, y=CONTACT_RATES, colour = control, group = id))+geom_line()
-ggplot(abm, aes(x=timestep, y=RT_EFFECTIVE, colour = control, group = id))+geom_line()
+```{r}
+ggplot(abm, aes(x=time, y=infected, colour = control, group=id))+geom_line(alpha=0.1)+ 
+  #guides(colour = guide_legend(override.aes = list(alpha = 1)))+
+  guides(colour = guide_none())+
+  facet_grid(param~cfg)#+scale_y_continuous(trans="log1p")
+ggplot(abm, aes(x=time, y=infected, colour = control))+geom_smooth(span=0.1,se = TRUE)+ 
+  # guides(colour = guide_legend(override.aes = list(alpha = 1)))+
+  guides(colour = guide_none())+
+  facet_grid(param~cfg)#+scale_y_continuous(trans="log1p")
+```
+
+
+```{r}
+ggplot(abm, aes(x=time, y=incidence, colour = control))+geom_smooth(span=0.1)+ guides(colour = guide_legend(override.aes = list(alpha = 1)))+facet_grid(param~cfg)#+scale_y_continuous(trans="log1p")
+```
+
+```{r}
+ggplot(abm, aes(x=time, y=test_positives, colour = control))+geom_smooth(span=0.1)+ guides(colour = guide_legend(override.aes = list(alpha = 1)))+facet_grid(param~cfg)#+scale_y_continuous(trans="log1p")
+```
+
+```{r}
+ggplot(abm, aes(x=time, y=susceptible, colour = control))+geom_smooth(span=0.1)+coord_cartesian(ylim=c(0,NA))+ guides(colour = guide_legend(override.aes = list(alpha = 1)))+facet_grid(param~cfg)
+```
+
+```{r}
+ggplot(abm, aes(x=time, y=as.numeric(rt), colour = control))+geom_smooth(span=0.2)+geom_hline(yintercept = 1)+ guides(colour = guide_legend(override.aes = list(alpha = 1)))+facet_grid(param~cfg)+coord_cartesian(ylim=c(0,3))
+
+```
+
+```{r}
+ggplot(abm, aes(x=time, y=contact_rates, colour = control ))+geom_smooth(span=0.1)+ 
+  #guides(colour = guide_legend(override.aes = list(alpha = 1)))+
+  guides(colour = guide_none())+
+  facet_grid(param~cfg)
+
+```
+
+
+```{r}
+tmp = abm %>% select(param,cfg, id, time, incidence, test_positives, symptomatic) %>% pivot_longer(cols = -c(time,param,cfg,id), names_to = "metric",values_to = "count")
+ggplot(tmp, aes(x=time, colour=metric, y=count))+
+  #geom_point(size=0.25)+
+  geom_smooth(span=0.1)+
+  facet_grid(param~cfg)
 
 ```
 
@@ -33,7 +78,11 @@ ggplot(abm, aes(x=timestep, y=RT_EFFECTIVE, colour = control, group = id))+geom_
 
 ```{r}
 
-abm %>% group_by(control) %>% summarise(total_loss = sum(20-CONTACT_RATES))
+abm %>% group_by(control) %>% summarise(
+  total_loss = mean(20-contact_rates)/20*100,
+)
 
 
 ```
+
+

@@ -1,4 +1,4 @@
-package io.github.ai4ci.basicModel;
+package io.github.ai4ci.deprecated.basicModel;
 
 import sim.engine.SimState;
 import sim.engine.Steppable;

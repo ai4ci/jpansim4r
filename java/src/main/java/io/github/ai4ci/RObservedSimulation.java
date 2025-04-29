@@ -7,6 +7,7 @@ import java.io.Serializable;
 import java.lang.reflect.InvocationTargetException;
 import java.util.Optional;
 import java.util.function.Supplier;
+import java.util.stream.Stream;
 
 
 public class RObservedSimulation<
@@ -14,7 +15,7 @@ public class RObservedSimulation<
 		A extends RAgent<A,S,?,?>> implements Serializable {
 
 	S simulation;
-	RObservatory<S,A> observatory;
+	RObservatory.Typed<S,A> observatory;
 	State state = State.UNCONFIGURED;
 	
 	public enum State {UNCONFIGURED, INITIALIZED, CONFIGURED, PARAMETERISED, READY, RUNNING, COMPLETE}
@@ -49,8 +50,10 @@ public class RObservedSimulation<
 		}
 	}
 	
+	
+	
 	public S getSimulation() {return simulation;}
-	public Optional<RObservatory<S,A>> getObservatory() {
+	public Optional<RObservatory.Typed<S,A>> getObservatory() {
 		return Optional.ofNullable(observatory);
 	}
 	
@@ -81,31 +84,18 @@ public class RObservedSimulation<
 		// TODO: better as a checked exception?
 		if (observatory == null) {
 			if (getState().equals(State.UNCONFIGURED)) throw new RuntimeException("Simulation must be configured before this is called.");
-			observatory = new RObservatory<S, A>(getSimulation());
-			registerNamedObservers();
+			observatory = new RObservatory.Typed<S, A>(getSimulation());
+			simulation.getSchedule().scheduleOnce(observatory, observatory.getPriority());
 		}
 	}	
 	
-	private void registerNamedObservers() {
-		// Any named observers in the simulation or agents we register with the observatory 
-		// so we can query them for export later
-		simulation.getObservers().forEach(o -> observatory.registerNamedObserver(o));
-		simulation.streamAgents().forEach(a -> {
-			a.getObservers().forEach(o -> observatory.registerNamedObserver(o));
-		});
-		// Add the observatory to the simulation schedule.
-		simulation.getSchedule().scheduleOnce(observatory, observatory.getPriority());
-	}
-
 	public void setState(State initialized) {
 		this.state = initialized;
 	}
 
-	public boolean hasNamedObservers() {
-		return 
-				this.getSimulation().getObservers().findAny().isPresent() ||
-				this.getSimulation().streamAgents().flatMap(a -> a.getObservers()).findAny().isPresent();
-	}
+//	public boolean hasNamedObservers() {
+//		return this.getSimulation().getAllObservers().findAny().isPresent();
+//	}
 	
 	
 	public static <S extends RSimulation<S,?,?,A>, 
@@ -125,5 +115,9 @@ public class RObservedSimulation<
 				}
 			};
 		};
+	}
+
+	public RObservatory getObservatoryUntyped() {
+		return observatory;
 	}
 }

@@ -1,6 +1,7 @@
 package io.github.ai4ci.flow;
 
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Iterator;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
@@ -10,6 +11,8 @@ import java.util.concurrent.Flow.Subscription;
 import java.util.concurrent.Future;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.function.BiFunction;
+import java.util.function.Consumer;
+
 
 import io.github.ai4ci.RAgent;
 import io.github.ai4ci.RObservedSimulation;
@@ -87,8 +90,27 @@ public class RSimulationFlow<
 		return tmp;
 	}
 
-	public RSimulationConsumer<S,A> process(String directory, int maxThreads) {
-		RSimulationConsumer<S,A> tmp = new RSimulationConsumer<S,A>(directory, maxThreads);
+	/**
+	 * Attach a new processor to a flow that
+	 * the applies the provided function to the
+	 * flow data so far.
+	 * 
+	 * @param function a function which takes input 
+	 * @return a new simulation flow.
+	 */
+	public RSimulationFlow<S,A,Integer> map(String name, Consumer<RObservedSimulation<S,A>> function) {
+		RSimulationFlow<S,A,Integer> tmp = new RSimulationFlow<S,A,Integer>(name, Collections.singleton(1), 
+				(s,i) -> {
+					function.accept(s);
+					return s;
+				},
+				this.executor);
+		this.subscribe(tmp);
+		return tmp;
+	}
+	
+	public RSimulationConsumer<S,A> process(String directory, int maxThreads, int maxMemGb, int maxSteps, int totalSimulations) {
+		RSimulationConsumer<S,A> tmp = new RSimulationConsumer<S,A>(directory, maxThreads, maxMemGb, maxSteps, totalSimulations);
 		this.subscribe(tmp);
 		return tmp;
 	}
@@ -217,9 +239,6 @@ public class RSimulationFlow<
 				} else {
 					complete = false;
 				}
-				
-				
-				
 				
 
 			}

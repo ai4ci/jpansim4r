@@ -1,25 +1,20 @@
 package io.github.ai4ci.testModel;
 
-import java.io.Serializable;
 import java.util.List;
 import java.util.Optional;
-import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
-import java.util.stream.StreamSupport;
 
-import org.jgrapht.generate.WattsStrogatzGraphGenerator;
 import org.jgrapht.graph.DirectedAcyclicGraph;
 import org.jgrapht.graph.SimpleWeightedGraph;
 
 import io.github.ai4ci.RObserver;
 import io.github.ai4ci.RSimulation;
-import io.github.ai4ci.RSimulationObserver;
-import io.github.ai4ci.RSteppable;
 import io.github.ai4ci.stats.Binomial;
 import io.github.ai4ci.testModel.Configuration.AgentStatus.State;
 import io.github.ai4ci.testModel.Configuration.OutbreakParameters.LockdownState;
 import io.github.ai4ci.testModel.TestResult.Result;
+import io.github.ai4ci.testModel.TestResult.Type;
 import lombok.extern.slf4j.Slf4j;
 
 @Slf4j
@@ -34,139 +29,51 @@ public class Outbreak extends RSimulation<Outbreak,
 	private SimpleWeightedGraph<Person, Person.Relationship> contacts;
 	private DirectedAcyclicGraph<Person, Person.Infection> infections;
 	
-	public enum Observations {INCIDENCE, CONTACT_RATES, TEST_POSITIVES, TESTS_PERFORMED, RT_EFFECTIVE};
+	public static RObserver.History<Outbreak, Long> SUSCEPTIBLE_COUNT = RObserver.counter(Outbreak.class, "susceptible",  a -> a.getStatus().getState().equals(State.SUSCEPTIBLE));
+	public static RObserver.History<Outbreak, Long> INFECTED_COUNT = RObserver.counter(Outbreak.class, "infected",  a -> a.getStatus().getState().equals(State.INFECTED));
+	public static RObserver.History<Outbreak, Long> RECOVERED_COUNT = RObserver.counter(Outbreak.class, "recovered",  a -> a.getStatus().getState().equals(State.RECOVERED));
+	public static RObserver.History<Outbreak, Long> INCIDENCE_COUNT = RObserver.counter(Outbreak.class, "incidence",  a -> a.infectedToday());
+	public static RObserver.History<Outbreak, Long> SYMPTOM_ONSET_COUNT = RObserver.counter(Outbreak.class, "symptomatic",  a -> a.symptomOnset());
+	public static RObserver.History<Outbreak, Long> KNOWN_POSITIVE_COUNT = RObserver.counter(Outbreak.class, "known_infected",  a -> a.knownTestPositiveToday(Type.PCR));
+	
+	public static RObserver.History<Outbreak, Double> CONTACT_RATE_HX = RObserver.history(Outbreak.class, "contact_rates", Double.class, s -> Optional.of(s.contactRates()));
+	public static RObserver.History<Outbreak, Integer> TEST_POS_HX = RObserver.history(Outbreak.class, "test_positives", Integer.class, s -> Optional.of(s.testPositivity().getNumerator()));
+	public static RObserver.History<Outbreak, Integer> TEST_TAKEN_HX = RObserver.history(Outbreak.class, "test_denom", Integer.class, s -> Optional.of(s.testPositivity().getDenominator()));
+	public static RObserver.History<Outbreak, Double> RT_EFFECTIVE_HX = RObserver.history(Outbreak.class, "rt", Double.class, s -> Optional.of(s.getRtEffective()));
+	
+	
+	public enum Observations {INCIDENCE, CONTACT_RATES, TEST_POSITIVES, TESTS_PERFORMED, RT_EFFECTIVE, SYMPTOM_ONSET};
+	
+	
+	@Override
+	public void setupHistory() {
+		this.registerNamedObserver(INFECTED_COUNT);
+		this.registerNamedObserver(SUSCEPTIBLE_COUNT);
+		this.registerNamedObserver(RECOVERED_COUNT);
+		this.registerNamedObserver(INCIDENCE_COUNT);
+		this.registerNamedObserver(KNOWN_POSITIVE_COUNT);
+		this.registerNamedObserver(CONTACT_RATE_HX);
+		this.registerNamedObserver(TEST_POS_HX);
+		this.registerNamedObserver(TEST_TAKEN_HX);
+		this.registerNamedObserver(RT_EFFECTIVE_HX);
+		this.registerNamedObserver(SYMPTOM_ONSET_COUNT);
+	}
 	
 	@Override
 	protected boolean checkComplete() {
-		return this.getNamedObservation(State.INFECTED, Long.class).stream()
+		return this.observations(INFECTED_COUNT).stream()
 				.limit(this.getParameterisation().getInfectivityProfile().size())
 				.reduce((x,y) -> x+y)
 				.map(l -> l == 0)
 				.orElse(Boolean.FALSE);
 	}
 
-	private static RSimulationObserver<Outbreak, Long> inState(State state) {
-		return RObserver.simulationHistory(state, Long.class,
-				s -> Optional.of(
-						s.streamAgents()
-						.filter(a -> a.getStatus().getState().equals(state))
-						.count()),
-				null
-			);
-	}
-	
-	@SuppressWarnings("unchecked")
-	@Override
-	public void setupStage1BeginConfiguration() {
-		
-		this.registerNamedObserver(inState(State.SUSCEPTIBLE));
-		this.registerNamedObserver(inState(State.INFECTED));
-		this.registerNamedObserver(inState(State.RECOVERED));
-		this.registerNamedObserver(RObserver.simulationHistory(
-				Observations.INCIDENCE, Long.class, 
-				s -> s.streamAgents().map(a -> a.infectedToday() ? 1L : 0L).reduce((x,y) -> x+y ),
-				null
-		));
-		this.registerNamedObserver(RObserver.simulationHistory(
-				Observations.CONTACT_RATES, Double.class,
-				s -> Optional.of(((Outbreak) s).contactRates()),
-				null
-		));
-		this.registerNamedObserver(RObserver.simulationHistory(
-				Observations.TEST_POSITIVES, Integer.class,
-				s -> Optional.of(((Outbreak) s).testPositivity().getKey()),
-				null
-		));
-		this.registerNamedObserver(RObserver.simulationHistory(
-				Observations.TESTS_PERFORMED, Integer.class,
-				s -> Optional.of(((Outbreak) s).testPositivity().getValue()),
-				null
-		));
-		this.registerNamedObserver(RObserver.simulationHistory(
-				Observations.RT_EFFECTIVE, Double.class,
-				s -> Optional.of(((Outbreak) s).getRtEffective()),
-				null
-		));
-		//		,
-		
-		this.contacts =  new SimpleWeightedGraph<>(
-				(Serializable & Supplier<Person>) () -> new Person(this),
-				(Serializable & Supplier<Person.Relationship>) () -> new Person.Relationship()
-		);
-		this.infections =  new DirectedAcyclicGraph<Person, Person.Infection>(
-				(Serializable & Supplier<Person>) () -> new Person(this),
-				(Serializable & Supplier<Person.Infection>) () -> new Person.Infection(this.getSimTime()),
-				false
-		);
-		
-	}
-
-	@Override
-	public void setupStage2CreateAgents() {
-		WattsStrogatzGraphGenerator<Person, Person.Relationship> gen = 
-				new WattsStrogatzGraphGenerator<Person, Person.Relationship>(
-						this.getConfiguration().getPopulationSize(),
-						this.getConfiguration().getConnectedness(),
-						this.getConfiguration().getNetworkRandomness()
-				);
-		gen.generateGraph(contacts);
-		log.debug("contact graph {} edges, {} average degree ", 
-				contacts.iterables().edgeCount(),
-				StreamSupport.stream(
-							contacts.iterables().vertices().spliterator(),
-							true
-						).mapToInt(
-							c -> contacts.degreeOf(c)
-						).average().getAsDouble()
-				);
-		contacts.edgeSet().forEach(r -> contacts.setEdgeWeight(r, 
-				this.sampler().uniform()
-				));
-	}
-	
-	public void setupStage4FinishConfiguration() {
-		super.setupStage4FinishConfiguration();
-		
-		this.getSchedule().scheduleOnce(
-				new RSteppable.UntilComplete<Outbreak>(10000) {
-					@Override
-					public void doStep(Outbreak s) {
-						log.info("Simulation {} at step {}: {} Susceptible; {} Infected; {} Recovered; {} Incidence; {} Rt; {} positivity; {} mean contact rate",
-									getUrn(),
-									s.getSchedule().getSteps(),
-									Outbreak.this.getLastNamedObservation(State.SUSCEPTIBLE, Long.class).orElse((long) s.getConfiguration().getPopulationSize()),
-									Outbreak.this.getLastNamedObservation(State.INFECTED, Long.class).orElse(0L),
-									Outbreak.this.getLastNamedObservation(State.RECOVERED, Long.class).orElse(0L),
-									Outbreak.this.getLastNamedObservation(Observations.INCIDENCE, Long.class).orElse(0L),
-									s.getRtEffective(),
-									s.testPositivity(),
-									s.contactRates()
-									
-							);
-					}
-				}
-		);
-	}
-	
-	
-
-	@Override
-	public void setupStage7FinishParameterisation() {
-		super.setupStage7FinishParameterisation();
-		
-		for (int i=0; i<this.getConfiguration().getImportedInfectionCount(); i++) {
-			int id = (int) (this.sampler().uniform()*this.getConfiguration().getPopulationSize());
-			this.getAgentById(id).getStatus().setState(State.INFECTED);
-			this.getAgentById(id).getStatus().setLastInfected(0);
-		}
-	}
-
 	public Optional<Long> getSusceptibleCount() {
-		return this.getLastNamedObservation(State.SUSCEPTIBLE.name(), Long.class);
+		return this.lastObservation(SUSCEPTIBLE_COUNT);
 	}
 
 	public Optional<Long> getInfectedCount() {
-		return this.getLastNamedObservation(State.INFECTED.name(), Long.class);
+		return this.lastObservation(INFECTED_COUNT);
 	}
 
 	protected SimpleWeightedGraph<Person, Person.Relationship> getContactNetwork() {
@@ -204,7 +111,7 @@ public class Outbreak extends RSimulation<Outbreak,
 		double denominator = this.streamAgents()
 			.filter(a -> a.getStatus().getState().equals(State.INFECTED))
 			.mapToDouble(x -> x.infectiousness())
-			.sum();
+			.sum() / this.getConfiguration().getTransmissionProbabilityGivenInfectiousContact(this.getParameterisation().getInfectivityProfile());
 		return ((double) numerator)/denominator;
 	}
 	
@@ -226,25 +133,34 @@ public class Outbreak extends RSimulation<Outbreak,
 	}
 
 	public boolean isInLockDown() {
-		
 		return this.getParameterisation().getLockdownState().equals(LockdownState.LOCKED_DOWN);
 		//return (this.getSimTime() > 20 && this.getSimTime() < 30);
 	}
 	
+	public double getLockdownContactRateAdjustment() {
+		return this.getParameterisation().getLockdownContactRate() / (this.getConfiguration().getConnectedness() * this.getConfiguration().getMeanContactProbability());
+	}
+	
+	private Long getKnownInfectedCount() {
+		return this.lastObservation(KNOWN_POSITIVE_COUNT).orElse(0L);
+	}
+	
 	public void updateParameterisation() {
 		
-		Binomial positivity = this.testPositivity();
-		int high = this.getParameterisation().getHighCasesLockdownInitiatedTrigger();
-		int low = this.getParameterisation().getLowCasesLockdownReleaseTrigger();
+		// Binomial positivity = this.testPositivity();
+//		int high = this.getParameterisation().getHighCasesLockdownInitiatedTrigger();
+//		int low = this.getParameterisation().getLowCasesLockdownReleaseTrigger();
+		double high = this.getParameterisation().getHighPrevalenceLockdownInitiatedTrigger() * this.getConfiguration().getPopulationSize();
+		double low = this.getParameterisation().getLowPrevalenceLockdownReleaseTrigger() * this.getConfiguration().getPopulationSize();
 		
 		//if (positivity.probability() > high && positivity.wilson(0.95).lower() > high*0.75) {
 		
-		if (positivity.getLeft() > high) {
+		if (getKnownInfectedCount() > high) {
 			
 			// everyone is locked down
 			this.getParameterisation().setLockdownState(LockdownState.LOCKED_DOWN);
 			
-		} else if (positivity.getLeft() < low 
+		} else if (getKnownInfectedCount() < low 
 				//&& positivity.wilson(0.95).upper() < low/0.75
 			) {
 			
@@ -252,10 +168,35 @@ public class Outbreak extends RSimulation<Outbreak,
 		};
 		// Otherwise it will stay as it was
 		
+		// Ongoing IMPORTS
+		// Randomly pick a number of cases, if they are susceptible then infect them.
+		int importCases = this.sampler().poisson(this.getParameterisation().getImportRate());
+		for (int i=0; i<importCases; i++) {
+			int id = (int) (this.sampler().uniform()*this.getConfiguration().getPopulationSize());
+			if (this.getAgentById(id).getStatus().getState().equals(State.SUSCEPTIBLE)) {
+				this.getAgentById(id).getStatus().setState(State.INFECTED);
+				this.getAgentById(id).getStatus().setLastInfected(this.getSimTime());
+			}
+		}
+		
+	}
+
+	public SimpleWeightedGraph<Person, Person.Relationship> getContacts() {
+		return contacts;
+	}
+
+	public void setContacts(SimpleWeightedGraph<Person, Person.Relationship> contacts) {
+		this.contacts = contacts;
+	}
+
+	public DirectedAcyclicGraph<Person, Person.Infection> getInfections() {
+		return infections;
 	}
 
 	
 	
-	
-	
+	public void setInfections(DirectedAcyclicGraph<Person, Person.Infection> infections) {
+		this.infections = infections;
+	}
+
 }

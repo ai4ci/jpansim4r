@@ -1,0 +1,846 @@
+---
+title: "jpansim4r: Test Model"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{jpansim4r: Getting Started}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r}
+
+library(tidyverse)
+
+library(rim)
+maxima.options(
+  format = "latex",
+  engine.format = "latex", 
+           engine.label = TRUE,
+           inline.format = "latex", 
+           inline.label = FALSE)
+```
+
+```{r}
+# fn = function(a,b) {
+#   return(function(t) (1 - exp(-a*t)) - (1-exp(-b*t))
+# }
+# 
+# ggplot()+geom_function(fun = ~ (1 - exp(-.x)) - (1 - exp(-2*.x))^4)+xlim(c(0,10))
+
+
+# 
+# LVmod <- function(Time, State, Pars) {
+#   with(as.list(c(State, Pars)), {
+#     Ingestion    <- rIng  * Prey * Predator
+#     GrowthPrey   <- rGrow * Prey * (1 - Prey/K)
+#     MortPredator <- rMort * Predator
+#     
+#     dPrey        <- GrowthPrey - Ingestion
+#     dPredator    <- Ingestion * assEff - MortPredator
+#     
+#     return(list(c(dPrey, dPredator)))
+#   })
+# }
+# 
+# pars  <- c(rIng   = 0.2,    # /day, rate of ingestion
+#            rGrow  = 1.0,    # /day, growth rate of prey
+#            rMort  = 0.2 ,   # /day, mortality rate of predator
+#            assEff = 0.5,    # -, assimilation efficiency
+#            K      = 10)     # mmol/m3, carrying capacity
+# 
+# yini  <- c(Prey = 1, Predator = 2)
+# times <- seq(0, 200, by = 1)
+# out   <- deSolve::ode(yini, times, LVmod, pars)
+# summary(out)
+# 
+# ## Default plot method
+# plot(out)
+
+
+## Experimental mechanistic model ----
+# Problems - Call innate immunity T-cells
+# Shoudl be innate and adaptive, adaptive is cellular (t-cells) or humoral (B-cells)
+
+```
+
+```{r}
+vk = function(time, state, params, expose_fn, ...) {
+  expose_fn = rlang::as_function(expose_fn)
+  with(as.list(c(state, params)), {
+    # Ingestion    <- rIng  * Prey * Predator
+    # GrowthPrey   <- rGrow * Prey * (1 - Prey/K)
+    # MortPredator <- rMort * Predator
+    # 
+    # dPrey        <- GrowthPrey - Ingestion
+    # dPredator    <- Ingestion * assEff - MortPredator
+    
+    N_host = S_host+I_host
+    N_active_B_cells = B_cells + plasma_cells
+    viral_neutralisation = # max(virus,0.1) 
+      virus * antibody * r_antibody_neutralisation
+    
+    
+    d_virus = I_host * r_viral_production -
+      # virus infecting cells is lost to pool
+      virus * S_host * r_viral_infection -
+      # virus neutralised by antibody
+      viral_neutralisation +
+      expose_fn(time) +
+      ifelse(virus < 0, -10000 * virus, 0)
+    
+    d_S_host = - virus * S_host * r_viral_infection + # infected
+      # logistic replacement of dead host cells
+      (r_host_regen*K_host) * (1-N_host/K_host)
+    
+    d_I_host = virus * S_host * r_viral_infection -
+      # t cells removing infected cells
+      r_T_cell_activity * I_host * T_cells
+    
+    
+    d_T_cells = 
+      # rate of T cell activation up to max carrying capacity of T cells
+      I_host * r_T_cell_activation * (1 - T_cells/K_T_cells) - 
+      # rate of T cell becomeing dormant
+      T_cells * r_T_cell_senescence
+    
+    d_B_cells = 
+      # B cells recruited from pool by T cells bound to infected hosts up to max 
+      I_host * T_cells * r_B_cell_recruitment * (1 - N_active_B_cells/K_B_cells) -
+      # B cells switching to plasma cells
+      B_cells * r_plasma_cell_switching
+    
+    d_plasma_cells = 
+      # B cells switching to plasma cells
+      B_cells * r_plasma_cell_switching -
+      # plasma cells going to sleep.
+      plasma_cells * r_plasma_cell_senescence
+      
+      
+    d_antibody = 
+      # plasma cells need T cell signalling to continue producing antibody
+      plasma_cells * T_cells * r_antibody_production -
+      # antibody consumed neutralising virus
+      viral_neutralisation -
+      antibody * r_antibody_waning
+    
+    return(list(c(d_virus,
+                  d_S_host,
+                  d_I_host,
+                  d_T_cells,
+                  d_B_cells,
+                  d_plasma_cells,
+                  d_antibody)))
+  })
+}
+
+params = c(
+  K_host = 1000, # carrying capacity of infection
+  K_T_cells = 10, # carrying capacity of t-cell pool
+  K_B_cells = 10, # carrying capacity of b-cell / plasma-cell pool
+  
+  r_host_regen = 0.05, # rate of replacement of infected cells (  = 1/recovery half life)
+  r_viral_production = 1, # rate at which infected cells produce viral particles
+  r_viral_infection = 0.2, # rate at which virus can infect susceptible cells
+  r_T_cell_activity = 0.25, # rate at which T cells can remove infected cells
+  r_T_cell_activation = 0.1, # rate at which T cells are activated
+  r_T_cell_senescence = 0.02, # rate at which T cells go to sleep
+  r_B_cell_recruitment = 0.025, # rate at which active T cells recruit B cells in presence of infected host
+  r_plasma_cell_switching = 0.25, # rate at which B cells switch to plasma cells
+  r_plasma_cell_senescence = 0.02, # rate at which B cells go to sleep
+  
+  r_antibody_production = 1, # rate at which plasma cells produce antibody
+  r_antibody_neutralisation = 0.2, # rate at which antibody neutralises viral particles
+  r_antibody_waning = 0.01, # rate at which antibody neutralises viral particles
+  
+  # rIng   = 0.2,    # /day, rate of ingestion
+  # rGrow  = 1.0,    # /day, growth rate of prey
+  # rMort  = 0.2 ,   # /day, mortality rate of predator
+  # assEff = 0.5,    # -, assimilation efficiency
+  # K      = 10)     # mmol/m3, carrying capacity
+  NULL
+)
+
+
+initial_state = c(
+  virus = 0,
+  S_host = params[["K_host"]],
+  I_host = 0,
+  T_cells = 0,
+  B_cells = 0,
+  plasma_cells = 0,
+  antibody = 0
+)
+
+times <- seq(0, 400, by = 1)
+out   <- deSolve::ode(initial_state, times, vk, params, expose_fn = 
+                        # ~ ifelse(.x %% 100 < 1, 0.1, 0)
+                        ~ ifelse(.x < 1, 0.1, 0)
+                      )
+summary(out)
+
+## Default plot method
+plot(out)
+
+df = as.data.frame(out)
+```
+
+```{r}
+
+## Sachak-Patwa 2023 ----
+
+# Handel 2009 IR model
+
+handel = function(time, state, params, expose_fn, ...) {
+  expose_fn = rlang::as_function(expose_fn)
+  with(as.list(c(state, params)), {
+    
+    # T - target cells
+    # V - virions
+    # E - exposed cells
+    # I - infected and producing cells
+    # D - dead target cells
+    # X - adaptive immunity 
+    # 
+    # beta - rate virions infect targets
+    # kappa - rate of conversion from exposed to infected
+    # tau - delay of innate immunity effect
+    # p - production rate of virions
+    # k - rate of neutralisation of virions by antibody
+    # c - rate of removal of virions
+    # delta - rate of removal of infected cells
+    # F(t) - innate immunity increase increases up to time t_star at rate lambda_1 then decreases at rate lambda_2
+    # s - strength of innate
+    # t_star
+    # A_1, lambda_1
+    # A_2, lambda_2
+    # f - rate at which adaptive immunity increases according to viral load V
+    # gamma - rate of removal of 
+    
+    
+    F = function(t) case_when(
+      t < 0 ~ 0,
+      t < t_star ~ A_1*exp(lambda_1*t),
+      t >= t_star ~ A_2*exp(-lambda_2*t)
+    )
+    
+    d_T = - beta * T * V
+    
+    d_E = beta * T * V - kappa * E
+    
+    d_I = kappa * E - delta * I
+    
+    d_D = delta * I
+    
+    d_V = (p * I)/(1+s*F(time-tau)) - c * V - k * V * X + expose_fn(time)
+    
+    d_X = f * V + (r * X * V) / (1+m*V) - gamma * X
+    
+    
+    return(list(c(d_T, d_E, d_I, d_D, d_V, d_X)))
+  })
+}
+
+params = c(
+  beta = 2.519e-7, #- rate virions infect targets
+  
+  tau = 1.757, # - delay of innate immunity effect
+  p = 5.464e-2, # - production rate of virions
+  k = 1.881, # - rate of neutralisation of virions by antibody
+  f = 1.271e-5, # - rate at which adaptive immunity increases according to viral load V
+    
+  c = 1/10, # - rate of removal of virions
+  delta = 1/2, # - rate of removal of infected cells
+  kappa = 1/4, # - rate of conversion from exposed to infected
+  gamma = 1.159, # - decay rate of adaptive IR
+  
+  s = 8.251e-3, # strength of innate 
+  t_star = 5, #time to peak innate immunity
+  A_1 = 0.8236, # 
+  lambda_1 = 1.241, #
+  A_2 = 2.128e6, 
+  lambda_2 = 1.712,#
+  
+  r = 2.241e-2, # expansion rate of adaptive IR,
+  m = 1, #Adaptive IR growth parameter
+  
+  NULL
+)
+
+
+initial_state = c(
+  T=7e9,
+  E=0,
+  I=0,
+  D=0,
+  V=0,
+  X=0
+)
+
+times <- seq(0, 100, by = 1)
+out   <- deSolve::ode(initial_state, times, handel, params, expose_fn = 
+                        # ~ ifelse(.x %% 100 < 1, 0.1, 0)
+                        ~ ifelse(.x < 1, 2.198e3*2, 0)
+)
+summary(out)
+
+## Default plot method
+plot(out)
+
+df = as.data.frame(out)
+
+```
+
+```{r}
+
+
+## TV ----
+
+
+handel_tv = function(time, state, params, expose_fn, ...) {
+  expose_fn = rlang::as_function(expose_fn)
+  with(as.list(c(state, params)), {
+    
+    # T - target cells
+    # V - virions
+    # 
+    # beta - rate virions infect targets
+    # p - production rate of virions
+    # c - rate of removal of virions
+    
+    d_T = - beta * T * V
+    d_V = p * beta * T * V - c * V + expose_fn(time)
+    
+    return(list(c(d_T, d_V)))
+  })
+}
+
+params = c(
+  beta = 3.71e-6, #- rate virions infect targets
+  p = 1.836e-4, # - production rate of virions
+  c = 0.9138, # - rate of removal of virions
+  
+  NULL
+)
+
+
+initial_state = c(
+  T=7e9,
+  V=0
+)
+
+times <- seq(0, 100, by = 1)
+out   <- deSolve::ode(initial_state, times, handel_tv, params, expose_fn = 
+                        # ~ ifelse(.x %% 100 < 1, 0.1, 0)
+                        ~ ifelse(.x < 1, 4.392e2*2, 0)
+)
+summary(out)
+
+## Default plot method
+plot(out)
+
+df = as.data.frame(out)
+
+```
+
+```{maxima}
+L: sqrt(1 - 1/R^2);
+assume(R > 0)$
+'integrate(x, x, 0, L) = integrate(x, x, 0, L);
+```
+
+```{r}
+
+
+
+## 2D phenomenological model ----
+# viral rates increase exponentially 
+# immunit rises expoenetially faster with delay
+# exponentially
+
+attract0 = function(x,k=1,x0=0) {
+  # return(-k*sin(x)/(1+x^2))
+  l = 1/(sqrt(2)*k)
+  # return (-(x-x0)*exp(-(l*(x-x0))^2))
+  
+  return (-(x-x0)*exp(-(l*(x-x0))+1))
+}
+
+ggplot()+geom_function(fun= ~ attract0(.x,k=1,x0=0),xlim=c(-5,5))+coord_fixed(xlim=c(-5,5),ylim=c(-5,5))
+
+```
+
+
+```{r}
+phenom = function(time, state, params, ...) {
+  with(as.list(c(state, params)), {
+    
+    # V - virions - prey - x
+    # I - immune function - predator - y
+    # 
+    # r_v - growth rate virions (alpha in LV model)
+    # r_neut - rate at which immune system neutralises virus (beta)
+    # r_i - growth rate immunity in response to infection (delta) 
+    # r_wane - decay rate immunity waning (gamma)
+    
+    d_V = 
+      r_v * V - 
+      r_neut * I * V + 
+      attract0(V,k)
+      
+    d_I = 
+      r_i * V * I -
+      r_wane * I +
+      #r_i * V - 
+      attract0(I,k,k)
+    
+    return(list(c(d_I,d_V)))
+  })
+}
+
+initial_state = c(
+  I=0,
+  V=0
+)
+```
+
+
+```{R}
+tmp = lapply(str_split("
+eqn1: 'diff(x(t),t) = alpha * x(t) - beta * x(t) * y(t);
+eqn2: 'diff(y(t),t) = - gamma * y(t) + delta * y(t) * y(t);
+assume(alpha > 0);
+assume(beta > 0);
+assume(delta > 0);
+assume(gamma > 0);
+atvalue(f(t), t=0, 1);
+atvalue(g(t), t=0, 0.1);
+desolve([eqn1,eqn2], [x(t),y(t)]);
+","\\n")[[1]],rim::maxima.get)
+
+htmltools::knit_print.(tmp[[2]]$wol$mathml)
+
+```
+
+
+$$
+\frac{dx}{dt} = \alpha x-\beta x y \\
+\frac{dy}{dt} = -\gamma y+\delta x y \\
+\frac{dy}{dx} = - \frac{y}{x} \frac{\delta x - \gamma}{\beta y -\alpha}
+$$
+
+$$
+V = \delta x - \gamma \ln(x) + \beta y - \alpha \ln(y) \\
+\left\{y = \frac{\alpha}{\beta},\ \  x = \frac{\gamma}{\delta} \right\} \\
+V = \delta x - \gamma \ln(x) + \beta  \frac{\alpha}{\beta} - \alpha \ln( \frac{\alpha}{\beta}) \\
+V = \delta x - \gamma \ln(x) + \alpha - \alpha ( \ln(\alpha) - \ln(\beta)) \\
+e^V = e^{(\delta x - \gamma \ln(x) + \alpha + \alpha \ln(\beta))} \\
+e^V = \frac{
+    e^{\delta x} e^\alpha \beta^{\alpha}
+  }{
+    x^{\gamma} \alpha^\alpha
+  } \\
+  
+\frac{e^V \alpha^\alpha}{e^\alpha \beta^{\alpha}} = x^{-\gamma} e^{\delta x} \\
+
+\frac{e^{\gamma V} \alpha^{\gamma \alpha}}{\gamma \delta e^{\alpha \gamma} \beta^{\alpha \gamma} } = \gamma \delta x e^{\gamma \delta x} \\
+
+\frac{\alpha^{\gamma \alpha}}{\gamma \delta e^{\alpha \gamma} \beta^{\alpha \gamma} } e^{\gamma V - \alpha}  = \gamma \delta x e^{\gamma \delta x} \\
+
+x = \frac{1}{\gamma \delta} W(\frac{e^V \alpha^\alpha}{\gamma \delta e^\alpha \beta^{\alpha} })
+$$
+$$\frac{d}{d\,t}\,x\left(t\right)=\alpha\,x\left(t\right)-\beta\,x\left(t\right)\,y\left(t\right)$$
+
+$$\frac{d}{d\,t}\,y\left(t\right)=\delta\,y\left(t\right)^2-y\left(t\right)\,\gamma$$
+## $$\mathtt{(\textit{\%o}_{183})}\quad V=-\log x\,\gamma-\alpha\,\log y+\beta\,y+\delta\,x$$
+## $$\mathtt{(\textit{\%o}_{184})}\quad \frac{V}{\gamma}=\frac{-\log x\,\gamma+\delta\,x-\alpha\,\log \left(\frac{\alpha}{\beta}\right)+\alpha}{\gamma}$$
+## $$\mathtt{(\textit{\%o}_{185})}\quad e^{\frac{V}{\gamma}}=\frac{\beta^{\frac{\alpha}{\gamma}}\,e^{\frac{\delta\,x+\alpha}{\gamma}}}{\alpha^{\frac{\alpha}{\gamma}}\,x}$$
+## $$\mathtt{(\textit{\%o}_{186})}\quad e^{\frac{V}{\gamma}-\frac{\alpha}{\gamma}}=\frac{\beta^{\frac{\alpha}{\gamma}}\,e^{\frac{\delta\,x+\alpha}{\gamma}-\frac{\alpha}{\gamma}}}{\alpha^{\frac{\alpha}{\gamma}}\,x}$$
+
+$$
+\frac{d^2x}{dt^2} = \alpha-\beta y \\
+\frac{d^2y}{dt^2} = -\gamma+\delta x \\
+
+
+\frac{dy}{dx} = - \frac{y}{x} \frac{\delta x - \gamma}{\beta y -\alpha} = 0\\ 
+
+
+
+
+$$
+
+```{maxima}
+eqn1: 'diff(x(t),t) = alpha * x(t) - beta * x(t) * y(t);
+eqn2: 'diff(y(t),t) = - gamma * y(t) + delta * x(t) * y(t);
+eq: V = delta * x - gamma * log(x) + beta * y - alpha * log(y);
+eq2: subst([y=alpha/beta], eq/gamma);
+eq3: exp(V/gamma) = radcan(exp(rhs(eq2)));
+eq3/exp(alpha/gamma);
+```
+
+
+$$ 
+e^{\frac{V}{\gamma}-\frac{\alpha}{\gamma}}=\frac{\beta^{\frac{\alpha}{\gamma}}\,e^{\frac{\delta\,x+\alpha}{\gamma}-\frac{\alpha}{\gamma}}}{\alpha^{\frac{\alpha}{\gamma}}\,x}
+$$
+
+```{r}
+params = c(
+  k = 0.001, # constant elimination of virus
+  r_v = 0.5, # - growth rate virions (alpha)
+  r_neut = 0.01, #  - rate at which immune system neutralises virus (beta)
+  r_wane = 0.001, # - decay rate immunity waning (gamma)
+  r_i = 0.5, # - growth rate immunity in response to infection (delta)
+  NULL
+)
+
+times <- seq(0, 400, by = 1)
+out   <- deSolve::ode(initial_state, times, phenom, params, events = 
+                list(data=as.data.frame(tibble(
+                  var = "V",
+                  time = seq(0,400,by=100),
+                  value = 0.01,
+                  method = "add"
+                )))
+          )
+summary(out)
+
+df = as.data.frame(out) %>% pivot_longer(-time,names_to = "param", values_to = "value")
+ggplot(df,aes(x=time,y=value))+geom_line()+facet_wrap(~param,scales = "free_y")
+
+```
+
+
+# Biological ODE model
+
+```{r}
+
+
+attract0 = function(x,k=1,x0=0) {
+  # return(-k*sin(x)/(1+x^2))
+  l = 1/(sqrt(2)*k)
+  return (-(x-x0)*exp(-(l*(x-x0))^2))
+}
+
+vk = function(time, state, params, ...) {
+  
+  with(as.list(c(state, params)), {
+    
+    d_virions = (
+        -r_humoural_immunity * virions * immune_active +
+        r_virion_replication * target_producing
+    ) + attract0(virions,0.005)
+    
+    target_died = k_target - target_susceptible - target_exposed - target_producing
+    
+    
+    d_target_susceptible = (
+      r_target_regeneration * target_died +
+      -r_virion_replication * virions * target_susceptible
+    ) 
+    
+    d_target_exposed = (
+      r_virion_replication * virions * target_susceptible +
+      -r_cellular_immunity * target_exposed * immune_active +
+      -r_virion_incubation * target_exposed
+    ) 
+    
+    d_target_producing = (
+      r_virion_incubation * target_exposed + 
+      -r_cellular_immunity * target_producing * immune_active +
+      -r_target_death * target_producing
+      # 0
+    ) + attract0(target_producing,0.005)
+    
+    immune_dormant = k_immune - immune_priming - immune_active
+      
+    d_immune_priming = (
+      r_immune_priming * immune_dormant * target_producing +
+      -r_immune_activation * immune_priming
+    ) 
+
+    d_immune_active = (
+      r_immune_activation * immune_priming +
+      -r_immune_senescence * immune_active
+    ) 
+    
+    
+    return(list(c(d_virions,
+                  d_target_susceptible,
+                  d_target_exposed,
+                  d_target_producing,
+                  d_immune_priming,
+                  d_immune_active)))
+  })
+}
+
+initial_state = c(
+  virions = 0,
+  target_susceptible = 1,
+  target_exposed = 0,
+  target_producing = 0,
+  immune_priming = 0,
+  immune_active = 0
+)
+```
+
+```{r}
+params = c(
+  k_target = 1,
+  k_immune = 1,
+  # r_virion_production = 2,
+  # r_virion_infection = 1,
+  r_virion_replication = 0.7, 
+  # has very little effect on timing, mostly on size
+  # critical value below which replication not possible.
+  # higher values more severe with greater fraction targets infected.
+  
+  # Affects things in a counter intuitive way needs to be quick (I e. bigger) to allow
+  # viral replication if humoral immunity 
+  r_virion_incubation = 2, # 1/incubation period (in cell incubation not the asme a in host incubation)
+  r_target_death = 0.2, # 1/(serial interval - incubation period)? 1/length of time of infected cell survival
+  
+  r_target_regeneration = 0.05, # 1/recovery time
+  
+  # r_target_death = 0.1, # 1/(serial interval - incubation period)?
+  # basically controls the back end of the curves - this has a massive effect on clearance
+  r_cellular_immunity = 0.5, # 1/(time to active immune clearance of infected cells)
+  # controls the front and height of the curve
+  r_humoural_immunity = 2, # 1/(time to active immune clearance of virions)
+  
+  r_immune_priming = 2, # 1/time for immune prep (smaller lengthens peak, as takes )
+  r_immune_activation = 0.2, # 1/delay to immune activation
+  r_immune_senescence = 1/100 # 1/100 # 1/immune waning
+)
+
+times <- seq(0, 400, by = 1)
+out   <- deSolve::ode(initial_state, times, vk, params, events = 
+                list(data=as.data.frame(tibble(
+                  var = "virions",
+                  time = seq(0,400,by=100),
+                  value = 0.01,
+                  method = "add"
+                )))
+          )
+
+df = as.data.frame(out) %>% pivot_longer(-time,names_to = "param", values_to = "value")
+ggplot(df,aes(x=time,y=value))+geom_line()+facet_wrap(~param,scales = "free_y")+
+  coord_cartesian(xlim=c(0,20))
+  #coord_cartesian(xlim=c(0,400))
+
+```
+
+
+# Stochastic biological model
+
+```{r}
+
+
+
+stoch = function(state, params, ...) {
+  
+  with(as.list(c(state, params)), {
+    
+    
+    # max_p_virion_removal - max rate removal by fully actvated immune system
+    p_virion_removal = max_p_virion_removal * immune_active/k_immune
+    virions_removed = rbinom(1, virions, p_virion_removal)
+    # virion_replication_rate - rate production removal by fully activated immune system
+    virions_added = rpois(1, virion_replication_rate * target_producing)
+    
+    
+    
+    # max_p_infection - probability 1 virion will infect cell in fully susceptible target
+    # should be possible if virions >> target for this to saturate.
+    # this does not do so in a logit style fashion though because of the 
+    # exponential growth of virions. It should be possible for complete runaway.
+    # the balance between max_p_infection*
+    
+    #TODO: this could be a Beta?
+    p_infection = max_p_infection*target_susceptible/k_target
+    target_infected = rbinom(1, virions-virions_removed, p_infection)
+    # you can't infect more that there are susceptible,
+    target_infected = min(c(target_infected,target_susceptible))
+    # this is infected targets but also the number of virions removed
+    
+    virions_1 = max(c(0,virions-virions_removed+virions_added-target_infected))
+    
+    # Target cells
+    
+    target_remaining = target_susceptible + target_exposed + target_producing
+    target_removed = k_target - target_remaining
+    target_recovered = rbinom(1, target_removed, p_target_recovery)
+    
+    
+    target_susceptible_1 = 
+      min(c(k_target,
+        max(c(0,
+              target_susceptible-target_infected+target_recovered
+        ))
+      ))
+    
+    
+    target_start_producing = rbinom(1, target_exposed, p_producing_given_exposed)
+    p_cellular_removal = max_p_cellular_removal * immune_active/k_immune
+    target_exposed_removed = rbinom(1, target_exposed, p_cellular_removal)
+    
+    target_exposed_1 = 
+      min(c(k_target,
+        max(c(0,
+              target_exposed - target_start_producing - target_exposed_removed + target_infected
+        ))
+      ))
+     
+    target_producing_removed = rbinom(1, target_producing, p_cellular_removal)
+    #target_producing_death = rbinom(1, target_producing, p_producing_death)
+    
+    # NK 
+    p_target_nk_elimiation = max_p_nk_elimination * target_producing / target_remaining
+    target_nk_elimiation = rbinom(1, k_nk, p_target_nk_elimiation)
+    
+    #target_producing_death = min(target_producing,k_nk)
+    
+    target_producing_1 = 
+      min(c(k_target,
+        max(c(0,
+              target_producing - target_producing_removed + 
+                target_start_producing - #target_producing_death
+                target_nk_elimiation
+        ))
+      ))
+
+    # Immunity
+    # At the moment immunity is modelled with one active immune type
+    # that performs cellular and humoural adaptive immunity
+    # plus a innate immunity in terms of NK cells. 
+    # NK cells remove things very quickly
+    # but saturate early.
+    
+    immune_dormant = k_immune - immune_priming - immune_active
+    # immune_dormant = k_immune - immune_active
+    
+    p_immune_induced = max_p_immune_induced * target_producing / target_remaining
+    # immune_start_active = rbinom(1, immune_dormant, p_immune_induced)
+    
+    immune_induced = rbinom(1, immune_dormant, p_immune_induced)
+    immune_start_active = rbinom(1, immune_priming, p_active_given_priming)
+
+    immune_priming_1 =
+      min(c(k_immune,
+        max(c(0,
+              immune_priming + immune_induced - immune_start_active
+        ))
+      ))
+      
+    immune_senescence = rbinom(1, immune_active, p_senescence_given_active)
+    
+    immune_active_1 = 
+      min(c(k_immune,
+        max(c(0,
+              immune_active + immune_start_active - immune_senescence
+        ))
+      ))
+      
+    return(list(virions = virions_1,
+                  target_susceptible = target_susceptible_1,
+                  target_exposed = target_exposed_1,
+                  target_producing = target_producing_1,
+                  immune_priming = immune_priming_1,
+                  immune_active = immune_active_1))
+  })
+}
+
+
+```
+
+```{r}
+
+
+
+params = tibble::tibble(
+  
+  # controls rate of falling and probability of entering chronic infection state, and final height of chronichly infected cells
+  immune_strength = 0.9,
+  k_target = 10000,
+  k_immune = 10000,
+  k_nk = 1000,
+  
+  viral_r0 = 0.8,
+  viral_aggression = 0.25,
+  
+  max_p_virion_removal = immune_strength, # max probability a virion will be neuratlised given full immune activation
+  
+  # size of peak, size of steady state
+  virion_replication_rate = 1+viral_r0, # rate at which infected cell produces new virions
+  # will interact with lifespan of producing cell.
+  # i.e. virion_replication_rate / p_producing_death > 1 for expansion in immune naive host
+  # maybe can work out boundary for a given state of immunity.
+  
+  # faster and higher peak virions
+  max_p_infection = 1/(1+viral_r0*viral_aggression), # probability a virion will infect a cell given fully susceptible targets
+  p_producing_given_exposed = viral_aggression, # probability exposed cell transitions to producing
+  
+  p_target_recovery = 0.1, # probability a died cell is regenerated
+  
+  # Smaller values lead to higher risk of chronic infection:
+  # needs to be larger that max_p_infection to get to elimination?
+  max_p_cellular_removal = immune_strength, # max probabality infected cell removed given full immune activation
+  max_p_nk_elimination = immune_strength,
+  
+  # p_producing_death = 0.4, # probability of spontaneous death of infected target - innate immunity
+  
+  max_p_immune_induced = 1, # maximum probability of activating an immune cell given all targets producing virus
+  p_active_given_priming = 0.1, # 1/delay to immune activation
+  
+  p_senescence_given_active = 1/200, # 1/immune waning
+  
+  initial_virions = 0,
+  initial_target_susceptible = k_target,
+  initial_target_exposed = 0,
+  initial_target_producing = 0,
+  initial_immune_priming = 0,
+  initial_immune_active = 0
+)
+```
+
+```{r}
+
+
+
+vary = c(0.1,0.3,0.5,0.7,0.9)
+
+combined = tibble::tibble()
+
+for (p in vary) {
+  
+  state = list(
+    virions = 0,
+    target_susceptible = k_target,
+    target_exposed = 0,
+    target_producing = 0,
+    immune_priming = 0,
+    immune_active = 0
+  )
+  
+  out = tibble::as_tibble(state)
+  params$p_active_given_priming = p
+  
+  for (i in 0:1000) {
+    # if (i %in% c(0,21,70)) state$immune_priming = state$immune_priming + 20000
+    if (i %% 100==50) state$virions = state$virions + 100
+    # if (i==200) state$virions = state$virions + 100
+    state = stoch(state, params)
+    out = dplyr::bind_rows(out,tibble::as_tibble(state))
+  }
+  
+  combined = combined %>% bind_rows(out %>% mutate(vary = p, time = row_number()))
+}
+
+combined %>% mutate(symptoms = 1-(target_susceptible+target_exposed+target_producing)/k_target) %>% pivot_longer(-c(time,vary)) %>% ggplot(aes(x=time,y=value, colour=as.factor(vary)))+geom_line()+
+  coord_cartesian(ylim=c(0,NA))+
+  facet_wrap(~name, scales = "free_y")
+
+
+combined %>% pivot_longer(-c(time,vary)) %>% ggplot(aes(x=time,y=value, colour=as.factor(vary)))+geom_line()+
+  coord_cartesian(ylim=c(0,NA), xlim=c(45,50+45))+
+  facet_wrap(~name, scales = "free_y")
+
+```

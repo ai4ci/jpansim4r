@@ -6,8 +6,6 @@ import org.apache.commons.statistics.distribution.BinomialDistribution;
 import org.apache.commons.statistics.distribution.PascalDistribution;
 import org.apache.commons.statistics.distribution.PoissonDistribution;
 
-import ec.util.MersenneTwisterFast;
-
 /**
  * Extends the existing RNG to allow sampling from a normal, and log
  * normal distribution.
@@ -25,6 +23,7 @@ public class Sampler implements Serializable {
 	}
 	
 	public synchronized double normal(double mean, double sd) {
+		if (sd==0) return mean;
 		return random.nextGaussian()*sd+mean;
 	}
 	
@@ -32,6 +31,7 @@ public class Sampler implements Serializable {
 //		double mu = Math.log(mean/(Math.sqrt(Math.pow(sd/mean,2)+1)));
 //		double sigma = Math.sqrt(Math.log(Math.pow(sd/mean,2)+1));
 //		return Math.exp(random.nextGaussian()*sigma+mu);
+		if (sd==0) return mean;
 		return Commons.logNormalfromMeanAndSd(mean, sd).createSampler(random).sample();
 		
 	}
@@ -51,6 +51,11 @@ public class Sampler implements Serializable {
 	
 	public synchronized int poisson(double mean) {
 		return PoissonDistribution.of(mean).createSampler(random).sample();
+	}
+	
+	public synchronized int zeroInflatedPoisson(double probabilityZero, double poissonMean) {
+		if (random.nextBoolean(probabilityZero)) return 0;
+		return PoissonDistribution.of(poissonMean).createSampler(random).sample();
 	}
 	
 	public synchronized int negBinom(double mean, double sd) {

@@ -8,51 +8,67 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 
+import org.apache.commons.lang3.SerializationUtils;
 import org.jgrapht.Graphs;
 import org.jgrapht.graph.DefaultWeightedEdge;
 import org.jgrapht.graph.DirectedAcyclicGraph;
 import org.jgrapht.graph.SimpleWeightedGraph;
 
+import bsh.This;
 import io.github.ai4ci.RAgent;
+import io.github.ai4ci.RObserver;
 import io.github.ai4ci.stats.Binomial;
 import io.github.ai4ci.stats.DelayDistribution;
 import io.github.ai4ci.testModel.Configuration.AgentStatus.State;
-import io.github.ai4ci.testModel.Configuration.OutbreakParameters.Control;
+import io.github.ai4ci.testModel.Configuration.AgentStatus.Symptoms;
 import io.github.ai4ci.testModel.TestResult.Result;
+import io.github.ai4ci.testModel.TestResult.Type;
 
 public class Person extends RAgent<Person,Outbreak,Configuration.AgentBaseline,Configuration.AgentStatus> {
 
-	public enum Observers {  TESTS, DETECTED_CONTACTS };
+	// public enum Observers {  TESTS, DETECTED_CONTACTS, KNOWN_RECOVERD, SYMPTOMATIC };
 
+	public static RObserver.OfLists<Person, TestResult> TESTS = RObserver.listHistory(Person.class, "test",  TestResult.class, 
+			a -> a.testToday(), 14);
+	
+	public static RObserver.OfLists<Person, Person.Reference> DETECTED_CONTACTS = RObserver.listHistory(Person.class, "detected_contacts",  Person.Reference.class, 
+			a -> a.getDetectedContacts().stream().map(a2 -> a2.weakReference()).collect(Collectors.toList()), 14);
+	
+	public static RObserver.Last<Person, Boolean> KNOWN_RECOVERED = RObserver.lastValue(Person.class, "known_recovered",  Boolean.class, 
+			a -> Optional.of(a.knownRecovered()));
+	
+	public static RObserver.History<Person,Configuration.AgentStatus> PCR_POSITIVES = RObserver.history(Person.class,"pcr_positives",Configuration.AgentStatus.class,
+			p -> Optional.ofNullable(p.knownTestPositiveToday(Type.PCR) ? SerializationUtils.clone(p.getStatus()) : null)
+		);
+	
+	public static RObserver.History<Person,Configuration.AgentStatus> TEST_AGENT = RObserver.history(Person.class,"test_agent",Configuration.AgentStatus.class,
+			p -> Optional.ofNullable(p.getId() == 1 ? SerializationUtils.clone(p.getStatus()) : null)
+		);
+	
+	@Override
+	public void setupHistory() {
+		// keep last 4 test results
+		this.registerNamedObserver(TESTS);
+		this.registerNamedObserver(DETECTED_CONTACTS);
+		this.registerNamedObserver(KNOWN_RECOVERED);
+		this.registerNamedObserver(PCR_POSITIVES);
+		this.registerNamedObserver(TEST_AGENT);
+	}
+	
+	
 	public Person(Outbreak simulation) {
 		super(simulation);
 	}
 	
-	@Override
-	public void setupStage3SetAgentBaseline() {
-		
-		Configuration.OutbreakConfig configuration = this.getSimulation().getConfiguration();
-		
-		this.setBaseline(Configuration.baselineFrom(configuration, this.sampler())); 
-		
-		keepHistory(
-			Observers.TESTS, 
-			TestResult.class,
-			a -> a.testToday(),
-			4
-		);
-		
-		keepHistoryList(
-			Observers.DETECTED_CONTACTS, 
-			Person.Reference.class, 
-			a -> a.getDetectedContacts().stream().map(a2 -> a2.weakReference()).collect(Collectors.toList()),
-			14
-		);
-		
-	}
-
 	public Stream<TestResult> testHistory() {
-		return this.getNamedObservation(Observers.TESTS, TestResult.class).stream();
+		return this.observations(TESTS).stream().flatMap(l -> l.stream());
+	}
+	
+	public Stream<TestResult> testHistoryIncludingToday() {
+		return Stream.concat(
+				this.testHistory(),
+				this.testToday().stream()
+		);
 	}
 	
 	@Override
@@ -65,18 +81,6 @@ public class Person extends RAgent<Person,Outbreak,Configuration.AgentBaseline,C
 	@Override
 	public Person self() {return this;}
 
-	@Override
-	public void setupStage6InitialiseAgentStatus() {
-		this.setStatus(
-				Configuration.statusFrom(
-						this.getSimulation().getConfiguration(), 
-						this.getSimulation().getParameterisation(), 
-						this.getBaseline(), 
-						this.sampler()
-				)
-		);
-	}
-
 //	public State yesterdayState() {
 //		return this.getOldStatus().map(s -> s.getState())
 //			.orElse(State.SUSCEPTIBLE);
@@ -87,63 +91,34 @@ public class Person extends RAgent<Person,Outbreak,Configuration.AgentBaseline,C
 //				this.getStatus().getState().equals(State.INFECTED);
 //	}
 	
-	public Optional<TestResult> testToday() {
-		return this.cached("testToday", TestResult.class, 
-			a -> {
-				double pTmp;
-				// TODO: this logic for deciding if a person is tested needs
-				// revision. This depends on all sorts of factors, and parameters
-				// around the use of a test. It'll need to be implemented as a
-				// strategy in the test class when we extend that.
-				if (a.awaitingTestOrKnownPositiveToday()) {
-					// Do not re-test if recent test positive or waiting for test
-					// result unless randomly re-tested due to baseline test rate
-					// e.g. screening.
-					pTmp = this.getStatus().getBaseProbabilityOfTesting();
-				} else {
-					// Regardless of infection status the patient can be tested. 
-					// This depends on a probability distribution of days since last infection and
-					// a baseline probability
-					// Combined probability of screening test or reactive test.
-					pTmp = this.getSimulation().getParameterisation().getTestTakenProbability( 
-							this.getDaysSinceLastInfection(),
-							this.getStatus().getBaseProbabilityOfTesting()
-					);
-				}
-				
-				if (this.sampler().uniform() > pTmp) { 
-					return Optional.empty();
-				} else { 
-					return Optional.of(new TestResult(
-						this.infectiousness() > 0, // true test status as test is testing infectiousness 
-						this.getSimTime().longValue(), // test date
-						(long) Math.floor(this.sampler().logNormal(
-							this.getSimulation().getParameterisation().getMeanTestDelay(),
-							this.getSimulation().getParameterisation().getSdTestDelay()
-						)), // per test test delay
-						this.sampler(), // rng
-						this.getSimulation().getParameterisation().getTestSensitivity(),
-						this.getSimulation().getParameterisation().getTestSpecificity()
-					));
-				}
-			}
+	/** 
+	 * Test results that have been performed today
+	 * @return a list of test results which will probably be pending status
+	 * unless there is an immediate result
+	 */
+	public List<TestResult> testToday() {
+		return this.cachedList("testToday", TestResult.class, 
+			a -> a.getStatus().getTestStrategy().apply(a)
 		);
 	}
 	
-	// TODO: This all needs restructuring for multiple tests with a single
-	// test repository / factory.
+	/**
+	 * tests that have had a result today, but would have been taken in the past
+	 * @return a list of test results none of which will be pending
+	 */
 	public List<TestResult> resultToday() {
 		return 
-				this.cachedList("results", TestResult.class, 
-						a -> a.getNamedObservation(Observers.TESTS, TestResult.class)
-							.stream()
-							.flatMap(t -> t.publishedResult(this.getSimTime()).stream())
-							.collect(Collectors.toList())
-				);
+			this.cachedList("results", TestResult.class, 
+					a -> a
+						.testHistoryIncludingToday()
+						.flatMap(t -> t.publishedResult(this.getSimTime()).stream())
+						.collect(Collectors.toList())
+			);
 	}
 	
 	@Override
 	public void updateStatus() {
+		
 		if (this.getStatus().getState().equals(State.SUSCEPTIBLE)) {
 			
 			/* Bit unsure about this calculation
@@ -154,7 +129,7 @@ public class Person extends RAgent<Person,Outbreak,Configuration.AgentBaseline,C
 			 */
 			Set<Person> infectors = this.getContacts().stream()
 					.filter(a -> a.getStatus().getState().equals(State.INFECTED))
-					.filter(a -> this.sampler().uniform() < a.infectiousness()*this.getStatus().getProbabilityInfectionGivenInfectiousContact() )
+					.filter(a -> this.sampler().uniform() < a.infectiousness() )
 					.collect(Collectors.toSet());
 			
 				// Locally acquired infections
@@ -183,99 +158,99 @@ public class Person extends RAgent<Person,Outbreak,Configuration.AgentBaseline,C
 		}
 		
 		// Regardless of infection status the patient can be tested
-		// Calling this method makes sure the decision to test is made but we 
-		// don't need the result.
-		this.testToday().ifPresent(
-				t -> this.getStatus().setLastTested(this.getSimTime())
-		);
+		// Calling this method makes sure that testing is done if not already
+		// cached
+		if (this.testToday().stream().findAny().isPresent()) {
+			this.getStatus().setLastTested(this.getSimTime());
+		}
 		
+		// Update symptomatic status
+		if (this.symptomatic()) {
+			this.getStatus().setSymptoms(Symptoms.PRESENT);
+		} else {
+			this.getStatus().setSymptoms(Symptoms.NONE);
+		}
+		
+		// TODO: change probabilityOfInfectionGivenInfectiousContact 
+		// to make a model with immunity in it. This would supplant susceptible
+		// recovered status, and make that a continuous variable. We could do this
+		// for another model.
+		
+		// Update infection risk / percievedInfectionRisk
+		if (this.getStatus().getState().equals(State.RECOVERED)) {
+			this.getStatus().setInfectionRisk(0);
+		} else if (this.getStatus().getState().equals(State.INFECTED)) {
+			this.getStatus().setInfectionRisk(1);
+		} else {
+			this.getStatus().setInfectionRisk(this.forceOfInfection());
+		}
+		
+		if (this.knownRecovered()) {
+			this.getStatus().setKnownInfectionRisk(0);
+		} else if (this.knownTestPositiveToday(Type.values())) {
+			this.getStatus().setKnownInfectionRisk(
+					this.infectiousness()
+			);
+		} else {
+			this.getStatus().setKnownInfectionRisk(this.knownContactRisk());
+		}
 	}
 
 	@Override
 	public void changeBehaviour() {
 		
-		double lockdownContactRateAdjustment = this.getSimulation().getParameterisation().getLockdownContactRate() / (this.getSimulation().getConfiguration().getConnectedness() * this.getSimulation().getConfiguration().getMeanContactProbability());
-		
-		if (this.getSimulation().getParameterisation().getControl().equals(Control.LOCKDOWN)) {
-			
-			
-			
-			if (this.getSimulation().isInLockDown()) {
-				
-				this.getStatus().setContactRateAdjustment(lockdownContactRateAdjustment);
-				
-			} else {
-				
-				if (this.knownTestPositiveToday()) {
-					this.getStatus().setContactRateAdjustment(lockdownContactRateAdjustment);
-				} else {
-					this.getStatus().setContactRateAdjustment(1.0D);
-				}
-			};
-			
-			
-			
-		} else if (this.getSimulation().getParameterisation().getControl().equals(Control.RISK_AVOIDANCE)) {
-			
-			double knownRisk = this.contactHistoryPositivity().probability();
-			double tmpMob = this.getStatus().getContactRateAdjustment();
-			
-			if (this.knownTestPositiveToday()) {
-				// Self isolation
-				this.getStatus().setContactRateAdjustment(lockdownContactRateAdjustment);
-				
-			} else if (this.getStatus().getState().equals(State.RECOVERED)) {
-				// If had covid then clear any mobility issues
-				this.getStatus().setContactRateAdjustment(1.0D); 
-			} else if (knownRisk > this.getBaseline().getHighRiskContactRateDecreaseTrigger()) {
-				// decreate mobility in response to local infections
-				tmpMob = Math.max(
-						lockdownContactRateAdjustment,
-						tmpMob*this.getBaseline().getContactRateRiskModifier()
-					);
-				this.getStatus().setContactRateAdjustment(tmpMob);
-			} else if (knownRisk < this.getBaseline().getLowRiskContactRateIncreaseTrigger()) {
-				// increase mobility in response to local infections
-				tmpMob = Math.min(
-						1,
-						tmpMob/this.getBaseline().getContactRateRiskModifier()
-					);
-				this.getStatus().setContactRateAdjustment(tmpMob);
-			} else {
-				// no change 
-			}
-			
-		} else {
-			
-			if (this.knownTestPositiveToday()) {
-				this.getStatus().setContactRateAdjustment(lockdownContactRateAdjustment);
-			} else {
-				this.getStatus().setContactRateAdjustment(1.0D);
-			}
-			
-		}
+		double newAdj = this.getSimulation().getParameterisation().getControl().apply(this);
+		this.getStatus().setContactRateAdjustment(newAdj);
 
 		
 	}
 	
 	/**
-	 * Select the most recent test result where the result is known
-	 * and 
+	 * Test positive if any tests are positive taken in the infectious period.
 	 * @return
 	 */
-	public boolean knownTestPositiveToday() {
+	public boolean knownTestPositiveToday(Type... types) {
+		return 
+				this.cached("test-pos-today", Boolean.TYPE, p -> p.testHistory()
+					.filter(t -> t.ofType(types))
+					.filter(t -> t.isResultCurrent(this.getSimTime(), this.infectionDuration() ))
+					.map(t -> t.resultOnDay(this.getSimTime()))
+					.filter(r -> !r.equals(Result.PENDING))
+					//.findFirst()
+					.map(r -> r.equals(Result.POSITIVE))
+					.reduce(Boolean::logicalOr)
+				).orElse(Boolean.FALSE);
+	}
+	
+	/**
+	 * A person is recovered if and only if a recent positive test is longer
+	 * ago than the infection duration. This does not allow waning.
+	 * @return
+	 */
+	public boolean knownRecovered() {
+		Optional<Boolean> tmp = this.lastObservation(Person.KNOWN_RECOVERED);
+		if (tmp.isPresent() && tmp.get().equals(Boolean.TRUE)) return true;
 		return this.testHistory()
-			.filter(t -> t.isResultCurrent(this.getSimTime(), this.getSimulation().getParameterisation().getInfectivityProfile().size() ))
-			.map(t -> t.resultOnDay(this.getSimTime()))
-			.filter(r -> !r.equals(Result.PENDING))
-			.findFirst()
-			.map(r -> r.equals(Result.POSITIVE))
-			//.reduce(Boolean::logicalOr)
+			// Only consider PCR tests
+			//.filter(t -> t.isCanonical())
+			.filter(t -> t.resultOnDay(this.getSimTime()).equals(Result.POSITIVE))
+			.map(t -> t.isResultCurrent(this.getSimTime(), this.infectionDuration()))
+			// a FALSE value here means that the positive test result is no longer current.
+			// we only need to prove that one positive value is no longer current 
+			.reduce((x,y) -> Boolean.logicalAnd(x, y))
+			// a FALSE value here means that at least 1 positive test is no longer current
+			.map(x -> !x.booleanValue())
+			// a TRUE value here means that at least 1 positive test is no longer current
+			// this is our definition.
 			.orElse(Boolean.FALSE);
 	}
 	
 	private long infectionDuration() {
 		return this.getSimulation().getParameterisation().getInfectivityProfile().size();
+	}
+	
+	private long symptomDuration() {
+		return this.getSimulation().getParameterisation().getSymptomProbabilityProfile().size();
 	}
 	
 	/**
@@ -284,24 +259,29 @@ public class Person extends RAgent<Person,Outbreak,Configuration.AgentBaseline,C
 	 * @return
 	 */
 	public boolean awaitingTestOrKnownPositiveToday() {
-		boolean tmp = this.testHistory()
-			.filter(t -> t.isResultCurrent(this.getSimTime(), this.infectionDuration() ))
-			.map(t -> t.resultOnDay(this.getSimTime()))
-			.map(r -> r.equals(Result.NEGATIVE))
-			// All currently are negative => TRUE; any tests positive or result is pending => FALSE; empty no tests been taken
-			.reduce(Boolean::logicalAnd)
-			.orElse(Boolean.TRUE)
+		boolean tmp = this.cached("pending-tests-today", Boolean.TYPE, p -> p.testHistory()
+				.filter(t -> t.isResultCurrent(this.getSimTime(), this.infectionDuration() ))
+				.map(t -> t.resultOnDay(this.getSimTime()))
+				.map(r -> r.equals(Result.NEGATIVE))
+				// All currently are negative => TRUE; any tests positive or result is pending => FALSE; empty no tests been taken
+				.reduce(Boolean::logicalAnd)
+			).orElse(Boolean.TRUE)
 			// All currently are negative or not tests been taken = TRUE; any tests positive or pending = FALSE
 			;
 		return !tmp;
 	}
 	
+	/**
+	 * The number of detected contacts that are known to have tested positive.
+	 * This handles cases where a test result is pending. 
+	 * @return a Binomial 
+	 */
 	public Binomial contactHistoryPositivity() {
 		return this.cached("contactPrevalence",Binomial.class, a -> {
 			Optional<Binomial> contactStatus = 
-					a.getNamedListObservation(Observers.DETECTED_CONTACTS, Person.Reference.class).stream()
+					a.observations(Person.DETECTED_CONTACTS).stream()
 						.flatMap(st -> st.stream())
-						.map(ar -> (Person) ar.resolve())
+						.map(ar -> ar.resolve(Person.class))
 						.map(contact -> contact.knownTestPositiveToday() ? Binomial.of(1, 1) : Binomial.of(0,1))
 						.reduce(Binomial::combine);
 			return contactStatus;
@@ -334,6 +314,10 @@ public class Person extends RAgent<Person,Outbreak,Configuration.AgentBaseline,C
 				.map(s -> this.getSimTime()-s.getLastTested());
 	}
 	
+	public boolean isInfected() {
+		return this.getStatus().getState() == State.INFECTED;
+	}
+	
 	/**
 	 * Describes the probability that this infectious individual transmits 
 	 * to a susceptible contact within a specific time step. 
@@ -344,49 +328,113 @@ public class Person extends RAgent<Person,Outbreak,Configuration.AgentBaseline,C
 				"infectiousness",
 				Double.class,
 				a -> {
-					DelayDistribution tmp = this.getSimulation().getParameterisation().getInfectivityProfile();
+					DelayDistribution tmp = this.getSimulation().getParameterisation().getInfectivityProfile()
+							.conditionedOn(this.getStatus().getProbabilityInfectionGivenInfectiousContact());
+					
 					return a.getDaysSinceLastInfection()
 						.map(i -> tmp.density(i.intValue()));
 				}).orElse(0D);
 	}
+	
+	public boolean symptomatic() {
+		return this.cached(
+				"symptomatic",
+				Boolean.class,
+				a -> {
+					
+					
+					boolean recentlyInfected = 
+							// Yesterdays status was infected
+							// a.getOldStatus().map(s->s.getState()).map(s -> s.equals(State.INFECTED)).orElse(Boolean.FALSE) ||
+							a.getDaysSinceLastInfection().map(t -> t < symptomDuration()).orElse(Boolean.FALSE);
+					boolean currentlySymptomatic =
+							a.getOldStatus().map(s->s.getSymptoms()).map(s -> s.equals(Symptoms.PRESENT)).orElse(Boolean.FALSE); 
+					
+					// Person was not recently infected hence symptoms are false
+					// positives and determined by specificity. This condition
+					// will on the whole clear symptomatic status
+					if (!recentlyInfected) {
+						// There is no recent infection 
+						// The symptom rates depend on symptom specificity and these
+						// are false positive symptoms
+						return Optional.of(a.sampler().uniform() < 1-a.getSimulation().getParameterisation().getSymptomSpecificity());
+					}
+					
+					// Person could still be exhibiting symptoms due to infection
+					// or infectious and not yet exhibiting symptoms.
+					if (!currentlySymptomatic) {
+						// Person does have infection but does not already have symptoms
+						// Onset of symptoms determined by delay distribution hazard
+						DelayDistribution prob = a.getSimulation().getParameterisation().getSymptomProbabilityProfile();
+						DelayDistribution probSymptoms = prob.conditionedOn(
+								a.getSimulation().getParameterisation().getSymptomSensitivity()
+						);
+						// This test is only performed if symptoms have been absent so far. 
+						// Therefore it is a survival type probability and we
+						// are interested in the unconditional hazard of 
+						// symptoms developing on this day. This takes
+						// into account the probability that no symptoms appear
+						long days = a.getDaysSinceLastInfection().get();
+						double todayP = probSymptoms.hazard((int) days);
+						return Optional.of(a.sampler().uniform() < todayP); 
+					} else {
+						// Infection is recent and Symptoms are already present. This is result of 
+						// previous steps. Have symptoms resolved?
+						// We say symptoms will have resolved if the infection
+						// is long enough ago that there is no probability of
+						// symptoms in which case the "not recently infected" rule
+						// above applies and the condition is already dealt with
+						// The only remaining case is always continues to be symptomatic
+						return Optional.of(Boolean.TRUE);
+					}
+					
+				}).get();
+	}
+	
+	public boolean symptomOnset() {
+		return this.getOldStatus().map(s -> s.getSymptoms().equals(Symptoms.NONE)).orElse(Boolean.FALSE) &&
+				this.symptomatic();
+	}
+	
+	public boolean screenToday() {
+		return this.getStatus().isScreened() &&
+				(this.getDaysSinceLastTestTaken()
+					.orElse(0L) > this.getStatus().getScreeningPeriod());
+	}
 
-	/**
-	 * Describes the probability that this infectious individual transmits 
-	 * to a susceptible contact within a specific time step. 
-	 * @return
-	 */
-//	public double hazardOfInfection() {
+//	public double cumInfectiousness() {
 //		return this.cached(
-//				"hazard",
+//				"cumInfectiousness",
 //				Double.class,
 //				a -> {
 //					DelayDistribution tmp = this.getSimulation().getParameterisation().getInfectivityProfile();
 //					return a.getDaysSinceLastInfection()
-//						.map(i -> tmp.hazard(i.intValue()));
+//						.map(i -> tmp.affected(i.intValue()));
 //				}).orElse(0D);
 //	}
-	
-	public double cumInfectiousness() {
-		return this.cached(
-				"cumInfectiousness",
-				Double.class,
-				a -> {
-					DelayDistribution tmp = this.getSimulation().getParameterisation().getInfectivityProfile();
-					return a.getDaysSinceLastInfection()
-						.map(i -> tmp.affected(i.intValue()));
-				}).orElse(0D);
-	}
 	
 	public double forceOfInfection() {
 		return this.cached(
 			"forceOfInfection", 
 			Double.class,
 			a -> a.getContacts().stream()
-				.map(c -> c.infectiousness()*this.getStatus().getProbabilityInfectionGivenInfectiousContact())
+				.map(c -> c.infectiousness())
 				.reduce((x,y) -> (1-(1-x)*(1-y)))
 		).orElse(0D);
 	}
 	
+	
+	public double knownContactRisk() {
+		return this.cached(
+			"knownForceOfInfection", 
+			Double.class,
+			a -> a.getDetectedContacts().stream()
+				.map(c -> c.getOldStatus().map(s -> s.getKnownInfectionRisk()).orElse(0D))
+				.reduce((x,y) -> (1-(1-x)*(1-y)))
+				//TODO: somehow we need to map this back to time since contact?
+				.map(d -> d * a.getStatus().getProbabilityInfectionGivenInfectiousContact())
+		).orElse(0D);
+	}
 	
 	
 	public List<Person> getContacts() {
@@ -401,12 +449,26 @@ public class Person extends RAgent<Person,Outbreak,Configuration.AgentBaseline,C
 		
 		return cachedList("contacts", Person.class, a -> {
 			SimpleWeightedGraph<Person, Relationship> network = a.getSimulation().getContactNetwork();
+			
 			int connectedness = this.getSimulation().getConfiguration().getConnectedness();
 			return StreamSupport.stream(network.edgesOf(a).spliterator(),false)
 					// The network edge weight is the quantile of connection strength.
 					// the contact rate is a people per day number.
-				.filter(e -> a.getContactRate()/connectedness > e.getConnectednessQuantile())
-				.map(e -> Graphs.getOppositeVertex(network, e, a))
+				.filter(e -> a.getContactRate() > 
+					this.sampler().binom(connectedness, e.getConnectednessQuantile()))
+				// .map(e -> Graphs.getOppositeVertex(network, e, a))
+				.flatMap(e -> { 
+					Person contact = Graphs.getOppositeVertex(network, e, a);
+					if (
+						// Check the 
+						contact.getContactRate()  > this.sampler().binom(connectedness, e.getConnectednessQuantile())
+					) {
+						return Stream.of(contact);
+					} else {
+						return Stream.empty();
+					}
+					
+				})
 				.collect(Collectors.toList());
 		});
 		
@@ -448,4 +510,10 @@ public class Person extends RAgent<Person,Outbreak,Configuration.AgentBaseline,C
 				this.getStatus().getState().equals(State.INFECTED) &&
 				this.getDaysSinceLastInfection().orElse(0L) == 0;
 	}
+
+
+	
+	
+	
+	
 }
